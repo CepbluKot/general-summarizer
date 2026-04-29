@@ -28,7 +28,12 @@ class LLMUnavailableError(Exception):
     """Raised on timeout, connection error, or 502/503."""
 
 
-_OVERFLOW_KEYWORDS = ("context length", "context_length", "maximum context", "token limit", "prompt is too long", "input is too long")
+_OVERFLOW_KEYWORDS = (
+    "context length", "context_length", "maximum context",
+    "token limit", "prompt is too long", "input is too long",
+    "contextwindowexceeded", "context window exceeded",
+    "longer than the model's context", "exceeds the limit",
+)
 
 
 class LLMClient:
@@ -123,14 +128,19 @@ class LLMClient:
 
             except InstructorRetryException as e:
                 err_str = str(e)
-                if "429" in err_str or "rate limit" in err_str.lower():
-                    logger.warning("LLM #%04d  instructor: rate limit exhausted (attempt %d) → ждём %ds",
+                err_lower = err_str.lower()
+                # Проверяем context overflow раньше всего остального
+                if any(kw in err_lower for kw in _OVERFLOW_KEYWORDS):
+                    logger.warning("LLM #%04d  instructor: context overflow (attempt %d)", n, attempt + 1)
+                    raise ContextOverflowError(err_str) from e
+                elif "429" in err_str or "rate limit" in err_lower:
+                    logger.warning("LLM #%04d  instructor: rate limit (attempt %d) → ждём %ds",
                                    n, attempt + 1, self.retry_wait_seconds)
                     if self.max_retries != -1 and attempt >= self.max_retries:
                         raise LLMUnavailableError(err_str) from e
                     await asyncio.sleep(self.retry_wait_seconds)
                     attempt += 1
-                elif "timeout" in err_str.lower():
+                elif "timeout" in err_lower:
                     logger.warning("LLM #%04d  instructor: timeout (attempt %d) → повтор", n, attempt + 1)
                     if self.max_retries != -1 and attempt >= self.max_retries:
                         raise LLMUnavailableError(err_str) from e
