@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "properties": {
+    "time_range": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Start and end ISO timestamps of this analysis"
+    },
+    "summary": {
+      "type": "string",
+      "description": "3-5 sentences: what happened, which services were affected"
+    },
+    "events": {
+      "type": "array",
+      "description": "Key events found in the logs, deduplicated",
+      "items": {
+        "type": "object",
+        "properties": {
+          "timestamp": { "type": "string" },
+          "source": { "type": "string", "description": "pod_name or namespace/object_name" },
+          "description": { "type": "string" },
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "info"] }
+        }
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "description": "Root cause hypotheses",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] }
+        }
+      }
+    },
+    "anomalies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Unusual patterns or spikes noticed"
+    },
+    "recommendations": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Concrete actions to fix or prevent recurrence"
+    }
+  }
+}
