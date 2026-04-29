@@ -35,7 +35,7 @@ tests/
 
 **LLM calls:** AsyncOpenAI with SSL verification disabled (`httpx.AsyncClient(verify=False)`) — for internal/self-hosted deployments.
 
-**JSON Schema output:** Schema included in system prompt. `response_format={"type": "json_object"}` forces JSON output. No Pydantic model needed at runtime.
+**JSON Schema output:** User schemas stay as plain JSON Schema dicts. `LLMClient` wraps each schema in a dynamic Pydantic `RootModel` whose validator runs `jsonschema` against the original schema, then passes that model to `instructor` as `response_model`. Instructor handles parsing retries and schema-validation retries; callers still receive a plain `dict`.
 
 **REDUCE error handling (in order):**
 1. ContextOverflowError + group > 2 → split in half, merge each half, merge results

@@ -57,6 +57,8 @@ touch summarizer/__init__.py summarizer/prompts/__init__.py tests/__init__.py
 openai>=1.30.0
 httpx>=0.27.0
 instructor>=1.3.0
+jsonschema>=4.0.0
+pydantic>=2.0.0
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 ```
@@ -1481,7 +1483,7 @@ tests/
 
 **LLM calls:** AsyncOpenAI with SSL verification disabled (`httpx.AsyncClient(verify=False)`) — for internal/self-hosted deployments.
 
-**JSON Schema output:** Schema included in system prompt. `response_format={"type": "json_object"}` forces JSON output. No Pydantic model needed at runtime.
+**JSON Schema output:** Schema is included in system prompt and wrapped into a dynamic Pydantic `RootModel` for `instructor.response_model`. The dynamic model validates with `jsonschema` against the original user-provided JSON Schema, so Instructor handles parsing and validation retries while users keep writing `schema.json`.
 
 **REDUCE error handling (in order):**
 1. ContextOverflowError + group > 2 → split in half, merge each half, merge results

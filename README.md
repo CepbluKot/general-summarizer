@@ -1,6 +1,6 @@
 # General Summarizer
 
-CLI tool that MAP-REDUCEs any large JSON or text file through an LLM and returns a structured JSON result.
+CLI tool that MAP-REDUCEs any large JSON or text file through an OpenAI-compatible LLM and returns a structured JSON result defined by your JSON Schema.
 
 ## Install
 
@@ -83,3 +83,5 @@ python -m summarizer.main \
 5. **Output** — final JSON written to file or stdout
 
 Large files that don't fit in one LLM call are automatically split, processed in chunks, and merged. If a merge group is too large, it's split in half. If still too large, items are compressed via LLM. If compression fails, programmatic merge is used as fallback.
+
+The output schema is sent in the prompt and wrapped as an Instructor `response_model` at runtime. Instructor performs parsing/validation retries, while the user-facing schema format remains standard JSON Schema.

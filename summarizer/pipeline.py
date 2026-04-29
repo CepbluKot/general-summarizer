@@ -57,7 +57,7 @@ class Pipeline:
         )
         user = "\n".join(rows)
 
-        return await self.llm.call(system, user)
+        return await self.llm.call(system, user, output_schema=self.config.output_schema)
 
     # ── REDUCE ────────────────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ class Pipeline:
         user = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts))
 
         try:
-            return await self.llm.call(system, user)
+            return await self.llm.call(system, user, output_schema=self.config.output_schema)
 
         except ContextOverflowError:
             if len(group) > 2 and _depth < 10:
@@ -118,7 +118,7 @@ class Pipeline:
             if self._is_server_down(exc):
                 await asyncio.sleep(30)
                 try:
-                    return await self.llm.call(system, user)
+                    return await self.llm.call(system, user, output_schema=self.config.output_schema)
                 except (LLMUnavailableError, Exception):
                     pass
 
@@ -128,7 +128,7 @@ class Pipeline:
                 parts2 = [json.dumps(it, ensure_ascii=False) for it in current]
                 user2 = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts2))
                 try:
-                    return await self.llm.call(system, user2)
+                    return await self.llm.call(system, user2, output_schema=self.config.output_schema)
                 except LLMUnavailableError as retry_exc:
                     if self._is_server_down(retry_exc):
                         await asyncio.sleep(30)
@@ -152,7 +152,7 @@ class Pipeline:
             parts = [json.dumps(it, ensure_ascii=False) for it in items]
             user = "\n\n".join(f"### Partial {j+1}\n{p}" for j, p in enumerate(parts))
             try:
-                return await self.llm.call(system, user)
+                return await self.llm.call(system, user, output_schema=self.config.output_schema)
             except ContextOverflowError:
                 continue
         return self._programmatic_merge(items)
@@ -169,6 +169,7 @@ class Pipeline:
             return await self.llm.call(
                 self.config.compress_prompt_template,
                 user,
+                output_schema=self.config.output_schema,
             )
         except (ContextOverflowError, LLMUnavailableError):
             return item

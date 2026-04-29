@@ -4,7 +4,7 @@
 
 **Architecture:** Token-based chunking → parallel MAP (LLM per chunk) → tree REDUCE until 1 result remains. Prompts are user-overridable with sensible defaults.
 
-**Tech Stack:** Python 3.12, instructor (Mode.JSON_SCHEMA), openai-compatible API, asyncio, pydantic (config only).
+**Tech Stack:** Python 3.12, instructor, OpenAI-compatible API (`AsyncOpenAI`), httpx, asyncio, JSON Schema, pydantic dynamic models.
 
 ---
 
@@ -39,7 +39,7 @@ general-summarizer/
     config.py           # PipelineConfig dataclass
     loader.py           # чтение файла, парсинг форматов
     chunker.py          # нарезка по токенам
-    llm_client.py       # вызов LLM через instructor (Mode.JSON_SCHEMA)
+    llm_client.py       # вызов LLM через instructor + OpenAI-compatible chat completions
     pipeline.py         # MAP-REDUCE оркестратор
     prompts/
       __init__.py
@@ -91,9 +91,13 @@ python -m summarizer.main \
 - Набирает строки пока не превышен бюджет, затем открывает новый чанк
 
 ### llm_client.py
-- `call(prompt_text, output_schema, model, api_base, api_key) -> dict`
-- Использует `instructor.from_openai(client, mode=instructor.Mode.JSON_SCHEMA)`
-- `response_model` — dict с JSON Schema от пользователя
+- `call(system, user, output_schema, model, api_base, api_key) -> dict`
+- Использует `instructor.from_openai(...)` поверх `openai.AsyncOpenAI`
+- `output_schema` — обычный dict с JSON Schema от пользователя
+- На каждый вызов создается динамический Pydantic `RootModel`, который валидирует ответ через `jsonschema` по исходной JSON Schema
+- Этот dynamic model передается в Instructor как `response_model`; Instructor делает parsing/validation retries и возвращает валидированный объект
+- Внешний API остается schema-first: пользователь пишет `schema.json`, а не Pydantic-класс
+- JSON Schema также остается в system prompt через `{output_schema}`, чтобы LLM видел точную структуру
 - SSL verification отключён (внутренние деплои)
 
 ### pipeline.py
@@ -135,8 +139,8 @@ group_size = max(2, int(context_tokens * 0.55 / avg_tokens))
 | `{user_prompt}` | MAP + REDUCE | `--prompt` |
 | `{schema_hint}` | MAP | `--schema-hint` (пусто для text) |
 | `{output_schema}` | MAP + REDUCE | JSON Schema как строка |
-| `{chunk_content}` | MAP | строки чанка, `\n`.join |
-| `{partial_results}` | REDUCE | JSON частичных результатов |
+
+Данные чанка и partial results передаются отдельным user message, не через placeholder.
 
 ### config.py
 ```python
