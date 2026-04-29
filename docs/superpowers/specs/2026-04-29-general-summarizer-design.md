@@ -43,8 +43,9 @@ general-summarizer/
     pipeline.py         # MAP-REDUCE оркестратор
     prompts/
       __init__.py
-      map_default.txt   # дефолтный MAP промпт
-      reduce_default.txt # дефолтный REDUCE промпт
+      map_default.txt      # дефолтный MAP промпт
+      reduce_default.txt   # дефолтный REDUCE промпт
+      compress_default.txt # дефолтный compress промпт
   docs/
     superpowers/specs/  # этот файл
   README.md             # руководство пользователя
@@ -64,8 +65,9 @@ python -m summarizer.main \
   --schema-hint "id: ..., msg: ..." \# описание полей (только для json)
   --prompt      "найди топ-5 проблем" \ # цель пользователя
   --output-schema schema.json \      # JSON Schema выходного формата
-  --map-prompt  map.txt \            # (опц.) переопределить MAP промпт
-  --reduce-prompt reduce.txt \       # (опц.) переопределить REDUCE промпт
+  --map-prompt      map.txt \        # (опц.) переопределить MAP промпт
+  --reduce-prompt   reduce.txt \     # (опц.) переопределить REDUCE промпт
+  --compress-prompt compress.txt \   # (опц.) переопределить compress промпт
   --model       qwen2.5-72b \
   --api-base    http://localhost:8000 \
   --api-key     sk-... \
@@ -97,7 +99,33 @@ python -m summarizer.main \
 ### pipeline.py
 - `run(rows, config) -> dict` (async)
 - MAP: `asyncio.gather` с семафором `map_concurrency`
-- REDUCE: tree-merge — берёт первую группу по токен-бюджету, мержит, результат в конец очереди, повторяет пока не останется 1
+- REDUCE: tree-merge с полной обработкой edge cases:
+
+**Adaptive group size** — размер группы не фиксирован, вычисляется динамически:
+```
+avg_tokens = среднее по первым 5 элементам очереди
+group_size = max(2, int(context_tokens * 0.55 / avg_tokens))
+```
+
+**Основной цикл REDUCE** — повторяется пока items > 1:
+1. Нарезаем на группы по `group_size`
+2. Каждую группу → `_merge_group`
+3. После мержа: если результат > `compression_target` → LLM-сжатие
+4. Результат в следующий раунд
+
+**`_merge_group` — обработка ошибок:**
+- `ContextOverflowError` при группе > 2 → делим пополам, мержим каждую часть рекурсивно, мержим два результата
+- `ContextOverflowError` при группе ≤ 2 → сжимаем items по одному, пробуем merge после каждого
+- `LLMUnavailableError` (502/503) → ждём 30с, повторяем
+- `LLMUnavailableError` (timeout) → удваиваем timeout, сжимаем, повторяем до 5 раз
+- Финальный **программный fallback**: массивы — объединяем, скалярные поля — берём из первого item, строки — конкатенируем через `\n---\n`
+
+**Компрессия** — отдельный LLM-вызов с промптом:
+```
+Сожми этот JSON-саммари вдвое, сохрани самое важное.
+Верни тот же JSON Schema.
+```
+Пользователь может переопределить compress-промпт через `--compress-prompt compress.txt`
 
 ### Промпты
 Плейсхолдеры заполняются через `str.format_map`:
@@ -125,8 +153,12 @@ class PipelineConfig:
     api_base: str
     api_key: str
     output_path: str | None
+    compress_prompt_template: str
     map_concurrency: int = 5
     token_budget: int = 6000
+    context_tokens: int = 32000      # окно контекста модели
+    compression_target_pct: int = 30 # сжимаем если результат > 30% контекста
+    max_reduce_rounds: int = 20
 ```
 
 ---
