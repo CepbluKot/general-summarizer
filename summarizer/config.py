@@ -24,6 +24,7 @@ class PipelineConfig:
     max_retries: int = 3            # -1 = бесконечно
     retry_wait_seconds: int = 60
     max_output_tokens: int | None = None  # None = дефолт модели (часто мало!), рекомендуется 8192+
+    pre_compress_chars: int = 50000 # если суммарный payload группы > N символов — сжимаем до мержа
     log_file: str | None = None     # путь к файлу лога, None = только stderr
 
     def __post_init__(self) -> None:

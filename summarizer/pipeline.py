@@ -69,7 +69,7 @@ class Pipeline:
 
         return list(await asyncio.gather(*[process(ch) for ch in chunks]))
 
-    async def _map_chunk(self, rows: list[str]) -> dict:
+    async def _map_chunk(self, rows: list[str], _depth: int = 0) -> dict:
         schema_hint = self.config.schema_hint
         schema_hint_block = f"Input data field descriptions:\n{schema_hint}" if schema_hint else ""
 
@@ -82,7 +82,17 @@ class Pipeline:
         )
         user = "\n".join(rows)
 
-        return await self.llm.call(system, user, output_schema=self.config.output_schema)
+        try:
+            return await self.llm.call(system, user, output_schema=self.config.output_schema)
+        except ContextOverflowError:
+            if len(rows) <= 1 or _depth >= 8:
+                logger.error("MAP chunk too small to split (depth=%d, rows=%d) → empty result", _depth, len(rows))
+                return {}
+            mid = len(rows) // 2
+            logger.warning("MAP context overflow (depth=%d, rows=%d) → splitting in half", _depth, len(rows))
+            left  = await self._map_chunk(rows[:mid], _depth + 1)
+            right = await self._map_chunk(rows[mid:], _depth + 1)
+            return self._programmatic_merge([left, right])
 
     # ── REDUCE ────────────────────────────────────────────────────────
 
@@ -131,6 +141,13 @@ class Pipeline:
 
     async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
         """Merge a group of partial results via LLM with full error handling."""
+        # Pre-compress: если суммарный payload слишком большой — сжимаем до мержа
+        payload_size = sum(len(json.dumps(it, ensure_ascii=False)) for it in group)
+        if payload_size > self.config.pre_compress_chars:
+            logger.info("Pre-compressing group (depth=%d): payload=%d chars > threshold=%d",
+                        _depth, payload_size, self.config.pre_compress_chars)
+            group = [await self._compress(it) for it in group]
+
         system = _fmt(
             self.config.reduce_prompt_template,
             user_prompt=self.config.user_prompt,

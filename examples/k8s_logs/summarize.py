@@ -32,6 +32,7 @@ MAX_RETRIES        = -1      # попыток при ошибке (-1 = беск
 RETRY_WAIT_SECONDS = 60      # секунд между попытками
 MAX_OUTPUT_TOKENS  = 8192    # макс. токенов в ответе LLM (None = дефолт модели)
                               # дефолт модели часто мал (1-4k) → ответы урезаются!
+PRE_COMPRESS_CHARS = 50000   # сжать входы REDUCE-мержа если суммарный payload > N символов
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
@@ -240,6 +241,7 @@ async def main():
         max_retries=MAX_RETRIES,
         retry_wait_seconds=RETRY_WAIT_SECONDS,
         max_output_tokens=MAX_OUTPUT_TOKENS,
+        pre_compress_chars=PRE_COMPRESS_CHARS,
         log_file=LOG_FILE,
     )
 
