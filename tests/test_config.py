@@ -16,7 +16,7 @@ def test_config_defaults():
         output_path=None,
     )
     assert cfg.map_concurrency == 5
-    assert cfg.token_budget == 6000
     assert cfg.context_tokens == 32000
+    assert cfg.token_budget == 32000 // 2   # auto-derived from context_tokens
     assert cfg.compression_target_pct == 30
     assert cfg.max_reduce_rounds == 20
