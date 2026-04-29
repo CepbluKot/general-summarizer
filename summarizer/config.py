@@ -22,6 +22,7 @@ class PipelineConfig:
     max_reduce_rounds: int = 20
     max_retries: int = 3       # -1 = бесконечно
     retry_wait_seconds: int = 60
+    llm_timeout: int = 10800  # таймаут одного LLM-вызова в секундах (default 3 часа)
     max_output_tokens: int | None = None  # None = дефолт модели, рекомендуется 8192+
     runs_dir: str | None = "runs"        # папка для артефактов прогона; None = не сохранять
     log_file: str | None = None

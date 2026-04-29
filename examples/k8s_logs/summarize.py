@@ -21,7 +21,7 @@ CH_PASSWORD   = ""
 CH_DATABASE   = "default"
 MAX_ROWS      = 5000   # сколько строк выгружать из БД (по каждому SQL-запросу)
 
-LLM_API_BASE       = "http://localhost:8000"
+LLM_API_BASE       = "https://localhost:8000"
 LLM_API_KEY        = "sk-placeholder"
 LLM_MODEL          = "qwen2.5-72b-instruct"
 LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в токенах
@@ -29,9 +29,9 @@ LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в т
 MAP_CONCURRENCY    = 3       # сколько батчей обрабатывается параллельно
                               # уменьши до 1-2 если получаешь 429 rate limit
 MAX_RETRIES        = -1      # попыток при ошибке (-1 = бесконечно)
-RETRY_WAIT_SECONDS = 60      # секунд между попытками
+RETRY_WAIT_SECONDS = 60      # секунд ожидания при rate limit / server error
+LLM_TIMEOUT        = 10800   # таймаут одного LLM-вызова в секундах (3 часа)
 MAX_OUTPUT_TOKENS  = 8192    # макс. токенов в ответе LLM (None = дефолт модели)
-                              # дефолт модели часто мал (1-4k) → ответы урезаются!
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
@@ -192,7 +192,7 @@ SCHEMA_HINT = (
 # ── ClickHouse ────────────────────────────────────────────────────────────────
 
 def ch_query(sql):
-    url = f"http://{CH_HOST}:{CH_PORT}/"
+    url = f"https://{CH_HOST}:{CH_PORT}/"
     body = (sql + " FORMAT JSONEachRow").encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("X-ClickHouse-User", CH_USER)
@@ -239,6 +239,7 @@ async def main():
         map_concurrency=MAP_CONCURRENCY,
         max_retries=MAX_RETRIES,
         retry_wait_seconds=RETRY_WAIT_SECONDS,
+        llm_timeout=LLM_TIMEOUT,
         max_output_tokens=MAX_OUTPUT_TOKENS,
         log_file=LOG_FILE,
     )

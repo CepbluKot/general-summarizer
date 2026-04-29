@@ -45,6 +45,7 @@ class Pipeline:
             model=config.model,
             api_base=config.api_base,
             api_key=config.api_key,
+            timeout=config.llm_timeout,
             max_retries=config.max_retries,
             retry_wait_seconds=config.retry_wait_seconds,
             max_output_tokens=config.max_output_tokens,

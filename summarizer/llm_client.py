@@ -81,40 +81,64 @@ class LLMClient:
                 logger.debug("LLM #%04d ok  attempt=%d  %.1fs  out=%d tok", n, attempt + 1, elapsed, out_tokens)
                 return result
             except openai.BadRequestError as e:
+                # 400: context overflow → сигнал для split/compress
                 msg = str(e).lower()
                 if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
-                    logger.warning("LLM context overflow (attempt %d): %s", attempt + 1, str(e)[:200])
+                    logger.warning("LLM #%04d  контекст переполнен (attempt %d)", n, attempt + 1)
                     raise ContextOverflowError(str(e)) from e
-                raise
-            except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError) as e:
-                limit_str = "max_retries" if (self.max_retries != -1 and attempt >= self.max_retries) else f"wait {self.retry_wait_seconds}s"
-                logger.warning("LLM error (attempt %d, %s): %s", attempt + 1, limit_str, type(e).__name__)
+                # Другие 400 — не крашимся, логируем и поднимаем как unavailable
+                logger.error("LLM #%04d  400 Bad Request (attempt %d): %s", n, attempt + 1, str(e)[:300])
+                raise LLMUnavailableError(f"400: {e}") from e
+
+            except openai.RateLimitError as e:
+                # 429 Rate Limit — ждём retry_wait_seconds (там указан сброс лимита)
+                logger.warning("LLM #%04d  429 Rate Limit (attempt %d) → ждём %ds",
+                               n, attempt + 1, self.retry_wait_seconds)
                 if self.max_retries != -1 and attempt >= self.max_retries:
                     raise LLMUnavailableError(str(e)) from e
-                logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
                 await asyncio.sleep(self.retry_wait_seconds)
                 attempt += 1
-            except openai.APIStatusError as e:
-                if e.status_code in (502, 503):
-                    logger.warning("LLM server error %d (attempt %d)", e.status_code, attempt + 1)
-                    if self.max_retries != -1 and attempt >= self.max_retries:
-                        raise LLMUnavailableError(str(e)) from e
-                    logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
-                    await asyncio.sleep(self.retry_wait_seconds)
-                    attempt += 1
-                else:
-                    raise
-            except InstructorRetryException as e:
-                if "429" in str(e) or "rate limit" in str(e).lower() or "timeout" in str(e).lower():
-                    logger.warning("LLM instructor retry exhausted (attempt %d): rate limit / timeout", attempt + 1)
-                    if self.max_retries != -1 and attempt >= self.max_retries:
-                        raise LLMUnavailableError(str(e)) from e
-                    logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
-                    await asyncio.sleep(self.retry_wait_seconds)
-                    attempt += 1
-                else:
-                    logger.error("LLM instructor error (attempt %d): %s", attempt + 1, str(e)[:300])
+
+            except (openai.APITimeoutError, openai.APIConnectionError) as e:
+                # Timeout / connection — ретраим без долгого ожидания
+                logger.warning("LLM #%04d  %s (attempt %d) → повтор", n, type(e).__name__, attempt + 1)
+                if self.max_retries != -1 and attempt >= self.max_retries:
                     raise LLMUnavailableError(str(e)) from e
+                attempt += 1
+
+            except openai.APIStatusError as e:
+                if e.status_code in (500, 502, 503, 504):
+                    # Серверные ошибки — ждём и ретраим
+                    logger.warning("LLM #%04d  HTTP %d (attempt %d) → ждём %ds",
+                                   n, e.status_code, attempt + 1, self.retry_wait_seconds)
+                    if self.max_retries != -1 and attempt >= self.max_retries:
+                        raise LLMUnavailableError(str(e)) from e
+                    await asyncio.sleep(self.retry_wait_seconds)
+                    attempt += 1
+                else:
+                    # Другие HTTP ошибки — не крашимся, поднимаем как unavailable
+                    logger.error("LLM #%04d  HTTP %d (attempt %d): %s",
+                                 n, e.status_code, attempt + 1, str(e)[:200])
+                    raise LLMUnavailableError(f"HTTP {e.status_code}: {e}") from e
+
+            except InstructorRetryException as e:
+                err_str = str(e)
+                if "429" in err_str or "rate limit" in err_str.lower():
+                    logger.warning("LLM #%04d  instructor: rate limit exhausted (attempt %d) → ждём %ds",
+                                   n, attempt + 1, self.retry_wait_seconds)
+                    if self.max_retries != -1 and attempt >= self.max_retries:
+                        raise LLMUnavailableError(err_str) from e
+                    await asyncio.sleep(self.retry_wait_seconds)
+                    attempt += 1
+                elif "timeout" in err_str.lower():
+                    logger.warning("LLM #%04d  instructor: timeout (attempt %d) → повтор", n, attempt + 1)
+                    if self.max_retries != -1 and attempt >= self.max_retries:
+                        raise LLMUnavailableError(err_str) from e
+                    attempt += 1
+                else:
+                    logger.error("LLM #%04d  instructor error (attempt %d): %s",
+                                 n, attempt + 1, err_str[:300])
+                    raise LLMUnavailableError(err_str) from e
 
     def _next_call_n(self) -> int:
         self._call_counter += 1
