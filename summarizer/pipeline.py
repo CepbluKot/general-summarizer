@@ -7,6 +7,16 @@ from summarizer.config import PipelineConfig
 from summarizer.llm_client import ContextOverflowError, LLMClient, LLMUnavailableError
 
 
+class _SafeDict(dict):
+    """Passes unknown {keys} through unchanged instead of raising KeyError."""
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _fmt(template: str, **kwargs) -> str:
+    return template.format_map(_SafeDict(kwargs))
+
+
 class Pipeline:
     _MAX_COMPRESS_RETRIES = 5
 
@@ -38,12 +48,13 @@ class Pipeline:
         schema_hint = self.config.schema_hint
         schema_hint_block = f"Input data field descriptions:\n{schema_hint}" if schema_hint else ""
 
-        system = self.config.map_prompt_template.format_map({
-            "user_prompt": self.config.user_prompt,
-            "schema_hint": schema_hint_block,
-            "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
-            "chunk_content": "",
-        })
+        system = _fmt(
+            self.config.map_prompt_template,
+            user_prompt=self.config.user_prompt,
+            schema_hint=schema_hint_block,
+            output_schema=json.dumps(self.config.output_schema, ensure_ascii=False),
+            chunk_content="",
+        )
         user = "\n".join(rows)
 
         return await self.llm.call(system, user, self.config.output_schema)
@@ -83,11 +94,12 @@ class Pipeline:
 
     async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
         """Merge a group of partial results via LLM with full error handling."""
-        system = self.config.reduce_prompt_template.format_map({
-            "user_prompt": self.config.user_prompt,
-            "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
-            "partial_results": "",
-        })
+        system = _fmt(
+            self.config.reduce_prompt_template,
+            user_prompt=self.config.user_prompt,
+            output_schema=json.dumps(self.config.output_schema, ensure_ascii=False),
+            partial_results="",
+        )
         parts = [json.dumps(it, ensure_ascii=False) for it in group]
         user = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts))
 
@@ -129,11 +141,12 @@ class Pipeline:
     async def _compress_and_merge(self, group: list[dict]) -> dict:
         """Compress items one by one until merge succeeds."""
         items = list(group)
-        system = self.config.reduce_prompt_template.format_map({
-            "user_prompt": self.config.user_prompt,
-            "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
-            "partial_results": "",
-        })
+        system = _fmt(
+            self.config.reduce_prompt_template,
+            user_prompt=self.config.user_prompt,
+            output_schema=json.dumps(self.config.output_schema, ensure_ascii=False),
+            partial_results="",
+        )
         for i in range(len(items)):
             items[i] = await self._compress(items[i])
             parts = [json.dumps(it, ensure_ascii=False) for it in items]
