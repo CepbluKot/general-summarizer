@@ -22,8 +22,7 @@ def _mock_response(content: str):
 @pytest.mark.asyncio
 async def test_call_returns_dict(client):
     payload = {"summary": "all good", "issues": []}
-    mock_resp = _mock_response(json.dumps(payload))
-    with patch.object(client, "_create", new=AsyncMock(return_value=mock_resp)):
+    with patch.object(client, "_create", new=AsyncMock(return_value=payload)):
         result = await client.call("system", "user", {"type": "object"})
     assert result == payload
 
