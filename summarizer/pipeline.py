@@ -90,12 +90,28 @@ class Pipeline:
 
     # ── MAP ───────────────────────────────────────────────────────────
 
+    def _build_map_system(self) -> str:
+        schema_hint = self.config.schema_hint
+        schema_hint_block = f"Input data field descriptions:\n{schema_hint}" if schema_hint else ""
+        return _fmt(
+            self.config.map_prompt_template,
+            user_prompt=self.config.user_prompt,
+            schema_hint=schema_hint_block,
+            output_schema=json.dumps(self.config.output_schema, ensure_ascii=False),
+            chunk_content="",
+        )
+
     async def _run_map(self, rows: list[str]) -> list[dict]:
-        chunks = chunk(rows, self.config.token_budget)
+        # Вычитаем реальный размер system prompt из бюджета на данные
+        map_system = self._build_map_system()
+        prompt_tokens = estimate_tokens(map_system)
+        data_budget = max(100, self.config.token_budget - prompt_tokens)
+        chunks = chunk(rows, data_budget)
         logger.info("СТАДИЯ 1  ▶  MAP")
         logger.info("  Строк всего   : %d", len(rows))
-        logger.info("  Чанков        : %d", len(chunks))
-        logger.info("  Бюджет чанка  : %d токенов", self.config.token_budget)
+        logger.info("  Промпт        : ~%d токенов", prompt_tokens)
+        logger.info("  Данные/батч   : %d токенов  (%d строк → %d чанков)",
+                    data_budget, len(rows), len(chunks))
         t_map = time.monotonic()
         sem = asyncio.Semaphore(self.config.map_concurrency)
         chunk_idx = [0]
@@ -119,16 +135,7 @@ class Pipeline:
         return results
 
     async def _map_chunk(self, rows: list[str], _depth: int = 0) -> dict:
-        schema_hint = self.config.schema_hint
-        schema_hint_block = f"Input data field descriptions:\n{schema_hint}" if schema_hint else ""
-
-        system = _fmt(
-            self.config.map_prompt_template,
-            user_prompt=self.config.user_prompt,
-            schema_hint=schema_hint_block,
-            output_schema=json.dumps(self.config.output_schema, ensure_ascii=False),
-            chunk_content="",
-        )
+        system = self._build_map_system()
         user = "\n".join(rows)
 
         try:
