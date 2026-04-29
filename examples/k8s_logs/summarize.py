@@ -28,6 +28,40 @@ INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBac
 
 OUTPUT_FILE   = "examples/k8s_logs/result.json"   # None → stdout
 
+MAP_PROMPT = """You are a senior SRE analyzing a Kubernetes log fragment during an incident.
+
+Task: {user_prompt}
+
+Input field descriptions:
+{schema_hint}
+
+Analyze the log fragment and extract key events, anomalies, and hypotheses.
+Focus on errors, crashes, timeouts, OOM, and scheduling failures.
+This is a PARTIAL analysis — only capture what you see in this fragment.
+
+Output JSON Schema:
+{output_schema}
+
+Output ONLY valid JSON matching the schema. No prose, no markdown fences."""
+
+REDUCE_PROMPT = """You are a senior SRE synthesizing partial Kubernetes incident analyses.
+
+Task: {user_prompt}
+
+Merge the partial analyses into one unified report.
+Deduplicate events, keep top hypotheses by confidence, merge recommendations.
+
+Output JSON Schema:
+{output_schema}
+
+Output ONLY valid JSON matching the schema. No prose, no markdown fences."""
+
+COMPRESS_PROMPT = """Compress the following JSON incident analysis to half its size.
+Keep the most critical events, top hypotheses, and all recommendations.
+Preserve the exact same JSON structure.
+
+Output ONLY valid JSON. No prose, no markdown fences."""
+
 # ── SQL ───────────────────────────────────────────────────────────────────────
 
 SQL_CONTAINERS = f"""
@@ -164,13 +198,6 @@ async def main():
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
     from summarizer.config import PipelineConfig
     from summarizer.pipeline import Pipeline
-    from summarizer.prompts import map_default, reduce_default, compress_default
-
-    # Загружаем дефолтные промпты из пакета
-    prompts_dir = Path(__file__).parent.parent.parent / "summarizer" / "prompts"
-    map_prompt      = (prompts_dir / "map_default.txt").read_text()
-    reduce_prompt   = (prompts_dir / "reduce_default.txt").read_text()
-    compress_prompt = (prompts_dir / "compress_default.txt").read_text()
 
     print("Fetching container logs...", file=sys.stderr)
     containers = ch_query(SQL_CONTAINERS)
@@ -191,9 +218,9 @@ async def main():
         schema_hint=SCHEMA_HINT,
         user_prompt=f"Incident: {INCIDENT}. Period: {PERIOD_START} → {PERIOD_END}. Find root causes, key events, recommendations.",
         output_schema=OUTPUT_SCHEMA,
-        map_prompt_template=map_prompt,
-        reduce_prompt_template=reduce_prompt,
-        compress_prompt_template=compress_prompt,
+        map_prompt_template=MAP_PROMPT,
+        reduce_prompt_template=REDUCE_PROMPT,
+        compress_prompt_template=COMPRESS_PROMPT,
         model=LLM_MODEL,
         api_base=LLM_API_BASE,
         api_key=LLM_API_KEY,
