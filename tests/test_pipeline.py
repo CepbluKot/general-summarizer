@@ -24,6 +24,7 @@ def make_config(**kwargs):
         output_path=None,
         map_concurrency=2,
         token_budget=100,
+        runs_dir=None,    # не создаём директории в тестах
     )
     defaults.update(kwargs)
     return PipelineConfig(**defaults)
@@ -136,10 +137,12 @@ async def test_context_overflow_pair_compresses_and_retries():
     config = make_config()
     p = Pipeline(config)
 
+    # При overflow на паре: сжимаем ОБА элемента сразу, потом повторяем merge
     call_sequence = [
-        ContextOverflowError("too long"),
-        {"issues": ["compressed-a"]},
-        {"issues": ["merged"]},
+        ContextOverflowError("too long"),   # 1: первый merge → overflow
+        {"issues": ["compressed-a"]},       # 2: compress item[0]
+        {"issues": ["compressed-b"]},       # 3: compress item[1]
+        {"issues": ["merged"]},             # 4: merge сжатых → успех
     ]
     idx = 0
     async def fake_call(system, user, output_schema=None):

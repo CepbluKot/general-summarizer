@@ -37,9 +37,9 @@ class Pipeline:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._run_dir = Path(config.runs_dir) / ts
             self._run_dir.mkdir(parents=True, exist_ok=True)
-            (self._run_dir / "map").mkdir()
-            (self._run_dir / "reduce").mkdir()
-            (self._run_dir / "llm").mkdir()
+            (self._run_dir / "map").mkdir(exist_ok=True)
+            (self._run_dir / "reduce").mkdir(exist_ok=True)
+            (self._run_dir / "llm").mkdir(exist_ok=True)
 
         self.llm = LLMClient(
             model=config.model,
