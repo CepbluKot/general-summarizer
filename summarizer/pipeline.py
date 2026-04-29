@@ -219,14 +219,29 @@ class Pipeline:
             return await self.llm.call(system, user, output_schema=self.config.output_schema)
 
         except ContextOverflowError:
+            # 1. Сначала пробуем сжать и повторить — часто помогает без сплита
+            logger.warning("REDUCE overflow (depth=%d, group=%d) → сжимаем и повторяем", _depth, len(group))
+            compressed = [await self._compress(it) for it in group]
+            compressed_user = "\n\n".join(
+                f"### Partial {i+1}\n{json.dumps(it, ensure_ascii=False)}"
+                for i, it in enumerate(compressed)
+            )
+            try:
+                return await self.llm.call(system, compressed_user, output_schema=self.config.output_schema)
+            except ContextOverflowError:
+                pass  # сжатие не помогло — идём дальше
+
+            # 2. Если группа > 2 — делим пополам (рекурсивно)
             if len(group) > 2 and _depth < 10:
-                logger.warning("REDUCE context overflow (depth=%d, group=%d) → splitting in half", _depth, len(group))
-                mid = len(group) // 2
-                left = await self._merge_group(group[:mid], _depth + 1)
-                right = await self._merge_group(group[mid:], _depth + 1)
+                logger.warning("REDUCE overflow после сжатия (depth=%d, group=%d) → делим пополам", _depth, len(group))
+                mid = len(compressed) // 2
+                left = await self._merge_group(compressed[:mid], _depth + 1)
+                right = await self._merge_group(compressed[mid:], _depth + 1)
                 return await self._merge_group([left, right], _depth + 1)
-            logger.warning("REDUCE context overflow on pair (depth=%d) → compress-and-merge", _depth)
-            return await self._compress_and_merge(group)
+
+            # 3. Пара — сжимаем по одному
+            logger.warning("REDUCE overflow на паре (depth=%d) → compress-and-merge", _depth)
+            return await self._compress_and_merge(compressed)
 
         except LLMUnavailableError as exc:
             if self._is_server_down(exc):
