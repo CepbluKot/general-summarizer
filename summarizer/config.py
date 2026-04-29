@@ -34,4 +34,10 @@ class PipelineConfig:
 
     def __post_init__(self) -> None:
         if self.token_budget == 0:
-            self.token_budget = self.context_tokens // 2
+            if self.max_output_tokens is not None:
+                # Знаем размер ответа — точно считаем бюджет:
+                # context - output - 3000 (запас на system prompt + schema)
+                self.token_budget = max(1000, self.context_tokens - self.max_output_tokens - 3000)
+            else:
+                # Размер ответа неизвестен — как в оригинале: 55% на данные
+                self.token_budget = int(self.context_tokens * 0.55)

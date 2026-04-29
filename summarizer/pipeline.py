@@ -188,18 +188,24 @@ class Pipeline:
         logger.info("СТАДИЯ 2  ✓  REDUCE завершён за %.1fс  →  1 результат", time.monotonic() - t_reduce)
         return items[0]
 
+    def _reduce_budget_tokens(self) -> int:
+        """Бюджет токенов на входные саммари в одном REDUCE-вызове."""
+        if self.config.max_output_tokens is not None:
+            return max(1000, self.config.context_tokens - self.config.max_output_tokens - 3000)
+        return int(self.config.context_tokens * 0.55)
+
     def _adaptive_group_size(self, items: list[dict]) -> int:
         sample = items[:min(5, len(items))]
         avg_tokens = sum(
             estimate_tokens(json.dumps(it, ensure_ascii=False)) for it in sample
         ) / len(sample)
-        budget = int(self.config.context_tokens * 0.55)
+        budget = self._reduce_budget_tokens()
         return max(2, int(budget / max(avg_tokens, 1)))
 
     async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
         """Merge a group of partial results via LLM with full error handling."""
-        # Pre-compress: если суммарный payload группы не влезает в REDUCE-бюджет (55% контекста)
-        pre_compress_threshold = int(self.config.context_tokens * 0.55)
+        # Pre-compress: если суммарный payload группы не влезает в REDUCE-бюджет
+        pre_compress_threshold = self._reduce_budget_tokens()
         payload_tokens = sum(estimate_tokens(json.dumps(it, ensure_ascii=False)) for it in group)
         if payload_tokens > pre_compress_threshold:
             logger.info("Pre-compressing group (depth=%d): payload=%d tok > threshold=%d tok",
