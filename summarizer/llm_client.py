@@ -31,7 +31,7 @@ class LLMClient:
         self.timeout = timeout
         self.max_retries = max_retries
 
-    async def call(self, system: str, user: str, output_schema: dict) -> dict:
+    async def call(self, system: str, user: str) -> dict:
         """Call LLM via instructor and return parsed JSON dict.
 
         Uses instructor Mode.JSON with response_model=dict for automatic

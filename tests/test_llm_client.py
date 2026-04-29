@@ -23,7 +23,7 @@ def _mock_response(content: str):
 async def test_call_returns_dict(client):
     payload = {"summary": "all good", "issues": []}
     with patch.object(client, "_create", new=AsyncMock(return_value=payload)):
-        result = await client.call("system", "user", {"type": "object"})
+        result = await client.call("system", "user")
     assert result == payload
 
 
@@ -37,7 +37,7 @@ async def test_context_overflow_raises(client):
     )
     with patch.object(client, "_create", new=AsyncMock(side_effect=err)):
         with pytest.raises(ContextOverflowError):
-            await client.call("system", "user", {"type": "object"})
+            await client.call("system", "user")
 
 
 @pytest.mark.asyncio
@@ -50,7 +50,7 @@ async def test_server_down_raises(client):
     )
     with patch.object(client, "_create", new=AsyncMock(side_effect=err)):
         with pytest.raises(LLMUnavailableError):
-            await client.call("system", "user", {"type": "object"})
+            await client.call("system", "user")
 
 
 @pytest.mark.asyncio
@@ -59,4 +59,4 @@ async def test_timeout_raises(client):
     err = openai.APITimeoutError(request=MagicMock())
     with patch.object(client, "_create", new=AsyncMock(side_effect=err)):
         with pytest.raises(LLMUnavailableError):
-            await client.call("system", "user", {"type": "object"})
+            await client.call("system", "user")
