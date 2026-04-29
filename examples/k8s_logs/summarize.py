@@ -19,10 +19,13 @@ CH_PORT       = 8123
 CH_USER       = "default"
 CH_PASSWORD   = ""
 CH_DATABASE   = "default"
+MAX_ROWS      = 5000   # сколько строк выгружать из БД (по каждому SQL-запросу)
 
-LLM_API_BASE  = "http://localhost:8000"
-LLM_API_KEY   = "sk-placeholder"
-LLM_MODEL     = "qwen2.5-72b-instruct"
+LLM_API_BASE      = "http://localhost:8000"
+LLM_API_KEY       = "sk-placeholder"
+LLM_MODEL         = "qwen2.5-72b-instruct"
+LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в токенах
+                              # от него зависит размер батча (MAP) и когда сжимать (REDUCE)
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
@@ -114,7 +117,7 @@ FROM (
     GROUP BY group_id, kubernetes_namespace_name, kubernetes_container_name
 )
 ORDER BY timestamp ASC
-LIMIT 5000
+LIMIT {MAX_ROWS}
 """
 
 SQL_EVENTS = f"""
@@ -129,7 +132,7 @@ FROM {CH_DATABASE}.log_k8s_events
 WHERE timestamp > parseDateTime64BestEffort('{PERIOD_START}')
   AND timestamp <= parseDateTime64BestEffort('{PERIOD_END}')
 ORDER BY timestamp ASC
-LIMIT 5000
+LIMIT {MAX_ROWS}
 """
 
 # ── OUTPUT SCHEMA ─────────────────────────────────────────────────────────────
@@ -212,6 +215,10 @@ async def main():
     rows = [json.dumps(r, ensure_ascii=False, default=str) for r in all_rows]
     print(f"Total: {len(rows)} rows", file=sys.stderr)
 
+    # token_budget = сколько токенов на один MAP-батч
+    # ~35% контекста: оставляем место под промпт + ответ модели
+    token_budget = int(LLM_CONTEXT_TOKENS * 0.35)
+
     config = PipelineConfig(
         input_path="",
         format="json",
@@ -225,6 +232,8 @@ async def main():
         api_base=LLM_API_BASE,
         api_key=LLM_API_KEY,
         output_path=OUTPUT_FILE,
+        token_budget=token_budget,
+        context_tokens=LLM_CONTEXT_TOKENS,
     )
 
     pipeline = Pipeline(config)
