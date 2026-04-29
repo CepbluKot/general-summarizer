@@ -46,7 +46,92 @@ class Pipeline:
 
         return await self.llm.call(system, user, self.config.output_schema)
 
-    # ── REDUCE placeholder (needed so Pipeline can be instantiated) ───
+    # ── REDUCE ────────────────────────────────────────────────────────
 
     async def _run_reduce(self, items: list[dict]) -> dict:
-        raise NotImplementedError("REDUCE not yet implemented")
+        if len(items) == 1:
+            return items[0]
+
+        for _ in range(self.config.max_reduce_rounds):
+            if len(items) == 1:
+                break
+            group_size = self._adaptive_group_size(items)
+            next_items: list[dict] = []
+            i = 0
+            while i < len(items):
+                group = items[i:i + group_size]
+                i += group_size
+                if len(group) == 1:
+                    next_items.append(group[0])
+                else:
+                    merged = await self._merge_group(group)
+                    merged = await self._maybe_compress(merged)
+                    next_items.append(merged)
+            items = next_items
+
+        return items[0]
+
+    def _adaptive_group_size(self, items: list[dict]) -> int:
+        sample = items[:min(5, len(items))]
+        avg_tokens = sum(
+            estimate_tokens(json.dumps(it, ensure_ascii=False)) for it in sample
+        ) / len(sample)
+        budget = int(self.config.context_tokens * 0.55)
+        return max(2, int(budget / max(avg_tokens, 1)))
+
+    async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
+        system = self.config.reduce_prompt_template.format_map({
+            "user_prompt": self.config.user_prompt,
+            "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
+            "partial_results": "",
+        })
+        parts = [json.dumps(it, ensure_ascii=False) for it in group]
+        user = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts))
+        return await self.llm.call(system, user, self.config.output_schema)
+
+    async def _maybe_compress(self, item: dict) -> dict:
+        target_chars = int(self.config.context_tokens * self.config.compression_target_pct / 100) * 3
+        if len(json.dumps(item, ensure_ascii=False)) <= target_chars:
+            return item
+        return await self._compress(item)
+
+    async def _compress(self, item: dict) -> dict:
+        user = json.dumps(item, ensure_ascii=False)
+        try:
+            return await self.llm.call(
+                self.config.compress_prompt_template,
+                user,
+                self.config.output_schema,
+            )
+        except ContextOverflowError:
+            return item
+
+    def _programmatic_merge(self, items: list[dict]) -> dict:
+        if not items:
+            return {}
+        result: dict = {}
+        for key in items[0]:
+            values = [it[key] for it in items if key in it]
+            if not values:
+                continue
+            first = values[0]
+            if isinstance(first, list):
+                seen: set[str] = set()
+                merged_list: list = []
+                for v in values:
+                    for elem in v:
+                        key_str = json.dumps(elem, ensure_ascii=False, sort_keys=True)
+                        if key_str not in seen:
+                            seen.add(key_str)
+                            merged_list.append(elem)
+                result[key] = merged_list
+            elif isinstance(first, str):
+                result[key] = "\n---\n".join(v for v in values if v)
+            else:
+                result[key] = first
+        return result
+
+    @staticmethod
+    def _is_server_down(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "502" in msg or "503" in msg or "bad gateway" in msg or "service unavailable" in msg

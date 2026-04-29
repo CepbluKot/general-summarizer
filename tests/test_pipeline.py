@@ -69,3 +69,37 @@ async def test_map_builds_prompt_with_placeholders():
     assert "summarize this" in captured["system"]
     assert "description of field" in captured["system"]
     assert "hello world" in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_reduce_single_item_returns_as_is():
+    config = make_config()
+    p = Pipeline(config)
+    result = await p._run_reduce([{"issues": ["only one"]}])
+    assert result == {"issues": ["only one"]}
+
+
+@pytest.mark.asyncio
+async def test_reduce_merges_multiple():
+    config = make_config()
+    partials = [{"issues": ["a"]}, {"issues": ["b"]}, {"issues": ["c"]}]
+
+    async def fake_call(system, user, schema):
+        return {"issues": ["merged"]}
+
+    p = Pipeline(config)
+    with patch.object(p.llm, "call", side_effect=fake_call):
+        result = await p._run_reduce(partials)
+
+    assert result == {"issues": ["merged"]}
+
+
+@pytest.mark.asyncio
+async def test_programmatic_merge_combines_arrays():
+    config = make_config()
+    p = Pipeline(config)
+    a = {"issues": ["x", "y"], "count": 2}
+    b = {"issues": ["z"], "count": 5}
+    merged = p._programmatic_merge([a, b])
+    assert set(merged["issues"]) == {"x", "y", "z"}
+    assert merged["count"] == 2  # scalar: take first
