@@ -21,11 +21,13 @@ CH_PASSWORD   = ""
 CH_DATABASE   = "default"
 MAX_ROWS      = 5000   # сколько строк выгружать из БД (по каждому SQL-запросу)
 
-LLM_API_BASE      = "http://localhost:8000"
-LLM_API_KEY       = "sk-placeholder"
-LLM_MODEL         = "qwen2.5-72b-instruct"
+LLM_API_BASE       = "http://localhost:8000"
+LLM_API_KEY        = "sk-placeholder"
+LLM_MODEL          = "qwen2.5-72b-instruct"
 LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в токенах
                               # от него зависит размер батча (MAP) и когда сжимать (REDUCE)
+MAP_CONCURRENCY    = 3       # сколько батчей обрабатывается параллельно
+                              # уменьши до 1-2 если получаешь 429 rate limit
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
@@ -229,6 +231,7 @@ async def main():
         api_key=LLM_API_KEY,
         output_path=OUTPUT_FILE,
         context_tokens=LLM_CONTEXT_TOKENS,
+        map_concurrency=MAP_CONCURRENCY,
     )
 
     pipeline = Pipeline(config)

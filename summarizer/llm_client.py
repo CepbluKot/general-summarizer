@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 import json
 from typing import Any, ClassVar
@@ -43,29 +44,38 @@ class LLMClient:
     async def call(self, system: str, user: str, output_schema: dict | None = None) -> dict:
         """Call LLM via Instructor and return a JSON-schema-validated dict.
 
-        The user-provided JSON Schema is wrapped in a dynamic Pydantic
-        RootModel so Instructor can validate responses and retry on validation
-        failures without requiring users to write Pydantic classes.
-
         Raises:
             ContextOverflowError: Context window exceeded.
             LLMUnavailableError: Timeout, connection error, or 5xx.
         """
-        try:
-            return await self._create(system, user, output_schema)
-        except openai.BadRequestError as e:
-            msg = str(e).lower()
-            if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
-                raise ContextOverflowError(str(e)) from e
-            raise
-        except (openai.APITimeoutError, openai.APIConnectionError) as e:
-            raise LLMUnavailableError(str(e)) from e
-        except openai.APIStatusError as e:
-            if e.status_code in (502, 503):
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self._create(system, user, output_schema)
+            except openai.BadRequestError as e:
+                msg = str(e).lower()
+                if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
+                    raise ContextOverflowError(str(e)) from e
+                raise
+            except openai.RateLimitError as e:
+                if attempt == self.max_retries:
+                    raise LLMUnavailableError(str(e)) from e
+                wait = 60 * (2 ** attempt)   # 60s → 120s → 240s
+                await asyncio.sleep(wait)
+            except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 raise LLMUnavailableError(str(e)) from e
-            raise
-        except InstructorRetryException as e:
-            raise LLMUnavailableError(str(e)) from e
+            except openai.APIStatusError as e:
+                if e.status_code in (502, 503):
+                    raise LLMUnavailableError(str(e)) from e
+                raise
+            except InstructorRetryException as e:
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    if attempt == self.max_retries:
+                        raise LLMUnavailableError(str(e)) from e
+                    wait = 60 * (2 ** attempt)
+                    await asyncio.sleep(wait)
+                else:
+                    raise LLMUnavailableError(str(e)) from e
+        raise LLMUnavailableError("max retries exceeded")
 
     async def _create(self, system: str, user: str, output_schema: dict | None = None) -> dict:
         """Make the actual API call. Separated for easy mocking in tests."""
