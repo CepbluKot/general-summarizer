@@ -8,6 +8,8 @@ from summarizer.llm_client import ContextOverflowError, LLMClient, LLMUnavailabl
 
 
 class Pipeline:
+    _MAX_COMPRESS_RETRIES = 5
+
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.llm = LLMClient(
@@ -80,6 +82,7 @@ class Pipeline:
         return max(2, int(budget / max(avg_tokens, 1)))
 
     async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
+        """Merge a group of partial results via LLM with full error handling."""
         system = self.config.reduce_prompt_template.format_map({
             "user_prompt": self.config.user_prompt,
             "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
@@ -87,7 +90,59 @@ class Pipeline:
         })
         parts = [json.dumps(it, ensure_ascii=False) for it in group]
         user = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts))
-        return await self.llm.call(system, user, self.config.output_schema)
+
+        try:
+            return await self.llm.call(system, user, self.config.output_schema)
+
+        except ContextOverflowError:
+            if len(group) > 2 and _depth < 10:
+                mid = len(group) // 2
+                left = await self._merge_group(group[:mid], _depth + 1)
+                right = await self._merge_group(group[mid:], _depth + 1)
+                return await self._merge_group([left, right], _depth + 1)
+            return await self._compress_and_merge(group)
+
+        except LLMUnavailableError as exc:
+            if self._is_server_down(exc):
+                await asyncio.sleep(30)
+                try:
+                    return await self.llm.call(system, user, self.config.output_schema)
+                except (LLMUnavailableError, Exception):
+                    pass
+
+            current = list(group)
+            for attempt in range(self._MAX_COMPRESS_RETRIES):
+                current = [await self._compress(it) for it in current]
+                parts2 = [json.dumps(it, ensure_ascii=False) for it in current]
+                user2 = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts2))
+                try:
+                    return await self.llm.call(system, user2, self.config.output_schema)
+                except LLMUnavailableError as retry_exc:
+                    if self._is_server_down(retry_exc):
+                        await asyncio.sleep(30)
+                    if attempt == self._MAX_COMPRESS_RETRIES - 1:
+                        return self._programmatic_merge(current)
+                except ContextOverflowError:
+                    pass
+            return self._programmatic_merge(current)
+
+    async def _compress_and_merge(self, group: list[dict]) -> dict:
+        """Compress items one by one until merge succeeds."""
+        items = list(group)
+        system = self.config.reduce_prompt_template.format_map({
+            "user_prompt": self.config.user_prompt,
+            "output_schema": json.dumps(self.config.output_schema, ensure_ascii=False),
+            "partial_results": "",
+        })
+        for i in range(len(items)):
+            items[i] = await self._compress(items[i])
+            parts = [json.dumps(it, ensure_ascii=False) for it in items]
+            user = "\n\n".join(f"### Partial {j+1}\n{p}" for j, p in enumerate(parts))
+            try:
+                return await self.llm.call(system, user, self.config.output_schema)
+            except ContextOverflowError:
+                continue
+        return self._programmatic_merge(items)
 
     async def _maybe_compress(self, item: dict) -> dict:
         target_chars = int(self.config.context_tokens * self.config.compression_target_pct / 100) * 3
@@ -103,7 +158,7 @@ class Pipeline:
                 user,
                 self.config.output_schema,
             )
-        except ContextOverflowError:
+        except (ContextOverflowError, LLMUnavailableError):
             return item
 
     def _programmatic_merge(self, items: list[dict]) -> dict:

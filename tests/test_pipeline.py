@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 from summarizer.config import PipelineConfig
 from summarizer.pipeline import Pipeline
+from summarizer.llm_client import ContextOverflowError, LLMUnavailableError
 from pathlib import Path
 
 PROMPTS = Path(__file__).parent.parent / "summarizer" / "prompts"
@@ -103,3 +104,91 @@ async def test_programmatic_merge_combines_arrays():
     merged = p._programmatic_merge([a, b])
     assert set(merged["issues"]) == {"x", "y", "z"}
     assert merged["count"] == 2  # scalar: take first
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_large_group_splits():
+    """ContextOverflowError on group > 2 → splits in half and retries."""
+    config = make_config()
+    p = Pipeline(config)
+
+    call_count = 0
+    async def fake_call(system, user, schema):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ContextOverflowError("too long")
+        return {"issues": [f"merged-{call_count}"]}
+
+    with patch.object(p.llm, "call", side_effect=fake_call):
+        group = [{"issues": [str(i)]} for i in range(4)]
+        result = await p._merge_group(group)
+
+    assert "issues" in result
+    assert call_count > 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_pair_compresses_and_retries():
+    """ContextOverflowError on pair → compresses items and retries."""
+    config = make_config()
+    p = Pipeline(config)
+
+    call_sequence = [
+        ContextOverflowError("too long"),
+        {"issues": ["compressed-a"]},
+        {"issues": ["merged"]},
+    ]
+    idx = 0
+    async def fake_call(system, user, schema):
+        nonlocal idx
+        result = call_sequence[idx]
+        idx += 1
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    with patch.object(p.llm, "call", side_effect=fake_call):
+        group = [{"issues": ["a"]}, {"issues": ["b"]}]
+        result = await p._merge_group(group)
+
+    assert result == {"issues": ["merged"]}
+
+
+@pytest.mark.asyncio
+async def test_server_down_waits_and_retries():
+    """LLMUnavailableError with 502 → waits and retries."""
+    config = make_config()
+    p = Pipeline(config)
+
+    call_count = 0
+    async def fake_call(system, user, schema):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise LLMUnavailableError("502 Bad Gateway")
+        return {"issues": ["ok"]}
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with patch.object(p.llm, "call", side_effect=fake_call):
+            result = await p._merge_group([{"issues": ["a"]}, {"issues": ["b"]}])
+
+    assert result == {"issues": ["ok"]}
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_programmatic_fallback_after_max_retries():
+    """After max compress retries → programmatic merge used."""
+    config = make_config()
+    p = Pipeline(config)
+
+    async def always_fails(system, user, schema):
+        raise LLMUnavailableError("always down")
+
+    with patch("asyncio.sleep", new=AsyncMock()):
+        with patch.object(p.llm, "call", side_effect=always_fails):
+            group = [{"issues": ["a"]}, {"issues": ["b"]}]
+            result = await p._merge_group(group)
+
+    assert "issues" in result
