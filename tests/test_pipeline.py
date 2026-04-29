@@ -35,7 +35,7 @@ async def test_map_calls_llm_per_chunk():
     config = make_config(token_budget=10)
 
     call_count = 0
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         nonlocal call_count
         call_count += 1
         return {"issues": [f"issue from chunk {call_count}"]}
@@ -58,7 +58,7 @@ async def test_map_builds_prompt_with_placeholders():
         user_prompt="summarize this",
     )
     captured = {}
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         captured["system"] = system
         captured["user"] = user
         return {"issues": []}
@@ -85,7 +85,7 @@ async def test_reduce_merges_multiple():
     config = make_config()
     partials = [{"issues": ["a"]}, {"issues": ["b"]}, {"issues": ["c"]}]
 
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         return {"issues": ["merged"]}
 
     p = Pipeline(config)
@@ -113,7 +113,7 @@ async def test_context_overflow_large_group_splits():
     p = Pipeline(config)
 
     call_count = 0
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -140,7 +140,7 @@ async def test_context_overflow_pair_compresses_and_retries():
         {"issues": ["merged"]},
     ]
     idx = 0
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         nonlocal idx
         result = call_sequence[idx]
         idx += 1
@@ -162,7 +162,7 @@ async def test_server_down_waits_and_retries():
     p = Pipeline(config)
 
     call_count = 0
-    async def fake_call(system, user, schema):
+    async def fake_call(system, user):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -183,7 +183,7 @@ async def test_programmatic_fallback_after_max_retries():
     config = make_config()
     p = Pipeline(config)
 
-    async def always_fails(system, user, schema):
+    async def always_fails(system, user):
         raise LLMUnavailableError("always down")
 
     with patch("asyncio.sleep", new=AsyncMock()):
