@@ -128,7 +128,7 @@ class Pipeline:
                 parts2 = [json.dumps(it, ensure_ascii=False) for it in current]
                 user2 = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts2))
                 try:
-                    return await self.llm.call(system, user2, self.config.output_schema)
+                    return await self.llm.call(system, user2)
                 except LLMUnavailableError as retry_exc:
                     if self._is_server_down(retry_exc):
                         await asyncio.sleep(30)
