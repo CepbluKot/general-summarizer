@@ -3,8 +3,7 @@ from dataclasses import dataclass
 
 
 _PROMPT_RESERVE    = 3_000   # токенов на system prompt
-_OUTPUT_RESERVE    = 16_000  # токенов на ответ модели (достаточно для детального саммари)
-# При context < 32k используем 20% если 16k не помещается
+_OUTPUT_RESERVE    = 32_768  # токенов на ответ модели
 
 
 @dataclass

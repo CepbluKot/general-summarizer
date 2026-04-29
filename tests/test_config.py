@@ -17,7 +17,7 @@ def test_config_defaults():
     )
     assert cfg.map_concurrency == 5
     assert cfg.context_tokens == 32000
-    # context=32000: output=min(16000, 32000*0.30)=9600, data=32000-9600-3000=19400
+    # context=32000: output=min(32768, 32000*0.30)=9600, data=32000-9600-3000=19400
     assert cfg.token_budget == 19400
     assert cfg.max_output_tokens == 9600
     assert cfg.max_reduce_rounds == 20
