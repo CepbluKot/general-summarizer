@@ -30,6 +30,7 @@ class LLMClient:
         self.api_key = api_key
         self.timeout = timeout
         self.max_retries = max_retries
+        self._http_client = httpx.AsyncClient(verify=False)
 
     async def call(self, system: str, user: str) -> dict:
         """Call LLM via instructor and return parsed JSON dict.
@@ -66,7 +67,7 @@ class LLMClient:
         openai_client = openai.AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.api_base if self.api_base.endswith("/v1") else self.api_base + "/v1",
-            http_client=httpx.AsyncClient(verify=False),
+            http_client=self._http_client,
             timeout=self.timeout,
             max_retries=0,  # instructor handles retries
         )

@@ -59,7 +59,22 @@ async def _main(argv=None) -> int:
     from summarizer.loader import load
     from summarizer.pipeline import Pipeline
 
-    output_schema = json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
+    try:
+        output_schema = json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"ERROR: output schema file not found: {args.output_schema}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"ERROR: invalid JSON in output schema: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        map_prompt = _load_prompt(args.map_prompt, "map_default.txt")
+        reduce_prompt = _load_prompt(args.reduce_prompt, "reduce_default.txt")
+        compress_prompt = _load_prompt(args.compress_prompt, "compress_default.txt")
+    except FileNotFoundError as e:
+        print(f"ERROR: prompt file not found: {e}", file=sys.stderr)
+        return 1
 
     config = PipelineConfig(
         input_path=args.input,
@@ -67,9 +82,9 @@ async def _main(argv=None) -> int:
         schema_hint=args.schema_hint,
         user_prompt=args.prompt,
         output_schema=output_schema,
-        map_prompt_template=_load_prompt(args.map_prompt, "map_default.txt"),
-        reduce_prompt_template=_load_prompt(args.reduce_prompt, "reduce_default.txt"),
-        compress_prompt_template=_load_prompt(args.compress_prompt, "compress_default.txt"),
+        map_prompt_template=map_prompt,
+        reduce_prompt_template=reduce_prompt,
+        compress_prompt_template=compress_prompt,
         model=args.model,
         api_base=args.api_base,
         api_key=args.api_key,
@@ -80,7 +95,15 @@ async def _main(argv=None) -> int:
         max_reduce_rounds=args.max_reduce_rounds,
     )
 
-    rows = load(args.input, args.format)
+    try:
+        rows = load(args.input, args.format)
+    except FileNotFoundError:
+        print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
     if not rows:
         print("ERROR: input file is empty", file=sys.stderr)
         return 1
