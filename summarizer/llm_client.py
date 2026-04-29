@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
+import time
 from typing import Any, ClassVar
 
 import httpx
@@ -12,6 +13,9 @@ from instructor.core.exceptions import InstructorRetryException
 from jsonschema import ValidationError as JSONSchemaValidationError
 from jsonschema import validators
 from pydantic import RootModel, model_validator
+
+from summarizer.log import get as _log
+logger = _log("llm_client")
 
 
 class ContextOverflowError(Exception):
@@ -50,35 +54,54 @@ class LLMClient:
             ContextOverflowError: Context window exceeded.
             LLMUnavailableError: Timeout, connection error, or 5xx.
         """
+        sys_tokens  = len(system) // 3
+        user_tokens = len(user) // 3
+        logger.debug("LLM call  system=%d tok  user=%d tok  total=%d tok",
+                     sys_tokens, user_tokens, sys_tokens + user_tokens)
+
         attempt = 0
         while True:
+            t0 = time.monotonic()
             try:
-                return await self._create(system, user, output_schema)
+                result = await self._create(system, user, output_schema)
+                elapsed = time.monotonic() - t0
+                out_tokens = len(json.dumps(result, ensure_ascii=False)) // 3
+                logger.debug("LLM ok  attempt=%d  %.1fs  out=%d tok", attempt + 1, elapsed, out_tokens)
+                return result
             except openai.BadRequestError as e:
                 msg = str(e).lower()
                 if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
+                    logger.warning("LLM context overflow (attempt %d): %s", attempt + 1, str(e)[:200])
                     raise ContextOverflowError(str(e)) from e
                 raise
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError) as e:
+                limit_str = "max_retries" if (self.max_retries != -1 and attempt >= self.max_retries) else f"wait {self.retry_wait_seconds}s"
+                logger.warning("LLM error (attempt %d, %s): %s", attempt + 1, limit_str, type(e).__name__)
                 if self.max_retries != -1 and attempt >= self.max_retries:
                     raise LLMUnavailableError(str(e)) from e
+                logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
                 await asyncio.sleep(self.retry_wait_seconds)
                 attempt += 1
             except openai.APIStatusError as e:
                 if e.status_code in (502, 503):
+                    logger.warning("LLM server error %d (attempt %d)", e.status_code, attempt + 1)
                     if self.max_retries != -1 and attempt >= self.max_retries:
                         raise LLMUnavailableError(str(e)) from e
+                    logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
                     await asyncio.sleep(self.retry_wait_seconds)
                     attempt += 1
                 else:
                     raise
             except InstructorRetryException as e:
                 if "429" in str(e) or "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+                    logger.warning("LLM instructor retry exhausted (attempt %d): rate limit / timeout", attempt + 1)
                     if self.max_retries != -1 and attempt >= self.max_retries:
                         raise LLMUnavailableError(str(e)) from e
+                    logger.info("Waiting %ds before retry (attempt %d)...", self.retry_wait_seconds, attempt + 2)
                     await asyncio.sleep(self.retry_wait_seconds)
                     attempt += 1
                 else:
+                    logger.error("LLM instructor error (attempt %d): %s", attempt + 1, str(e)[:300])
                     raise LLMUnavailableError(str(e)) from e
 
     async def _create(self, system: str, user: str, output_schema: dict | None = None) -> dict:

@@ -34,6 +34,7 @@ RETRY_WAIT_SECONDS = 60      # секунд между попытками
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
 OUTPUT_FILE   = "examples/k8s_logs/result.json"   # None → stdout
+LOG_FILE      = "examples/k8s_logs/run.log"        # None → только stderr
 
 MAP_PROMPT = """You are a senior SRE analyzing a Kubernetes log fragment during an incident.
 
@@ -236,6 +237,7 @@ async def main():
         map_concurrency=MAP_CONCURRENCY,
         max_retries=MAX_RETRIES,
         retry_wait_seconds=RETRY_WAIT_SECONDS,
+        log_file=LOG_FILE,
     )
 
     pipeline = Pipeline(config)

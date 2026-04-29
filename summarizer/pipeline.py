@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from summarizer.chunker import chunk, estimate_tokens
 from summarizer.config import PipelineConfig
 from summarizer.llm_client import ContextOverflowError, LLMClient, LLMUnavailableError
+from summarizer.log import get as _log
+
+logger = _log("pipeline")
 
 
 class _SafeDict(dict):
@@ -22,6 +26,8 @@ class Pipeline:
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+        from summarizer.log import setup as _setup
+        _setup(config.log_file)
         self.llm = LLMClient(
             model=config.model,
             api_base=config.api_base,
@@ -31,18 +37,34 @@ class Pipeline:
         )
 
     async def run(self, rows: list[str]) -> dict:
+        t0 = time.monotonic()
+        logger.info("Pipeline start: %d rows  token_budget=%d  context_tokens=%d  concurrency=%d",
+                    len(rows), self.config.token_budget, self.config.context_tokens, self.config.map_concurrency)
         partials = await self._run_map(rows)
-        return await self._run_reduce(partials)
+        logger.info("MAP done: %d partials in %.1fs", len(partials), time.monotonic() - t0)
+        result = await self._run_reduce(partials)
+        logger.info("Pipeline done in %.1fs", time.monotonic() - t0)
+        return result
 
     # ── MAP ───────────────────────────────────────────────────────────
 
     async def _run_map(self, rows: list[str]) -> list[dict]:
         chunks = chunk(rows, self.config.token_budget)
+        logger.info("MAP: %d rows → %d chunks  (token_budget=%d, concurrency=%d)",
+                    len(rows), len(chunks), self.config.token_budget, self.config.map_concurrency)
         sem = asyncio.Semaphore(self.config.map_concurrency)
+        chunk_idx = [0]
 
         async def process(ch: list[str]) -> dict:
             async with sem:
-                return await self._map_chunk(ch)
+                idx = chunk_idx[0]
+                chunk_idx[0] += 1
+                tok = sum(estimate_tokens(r) for r in ch)
+                logger.debug("MAP chunk %d/%d  rows=%d  tokens~%d", idx + 1, len(chunks), len(ch), tok)
+                t = time.monotonic()
+                result = await self._map_chunk(ch)
+                logger.debug("MAP chunk %d/%d done in %.1fs", idx + 1, len(chunks), time.monotonic() - t)
+                return result
 
         return list(await asyncio.gather(*[process(ch) for ch in chunks]))
 
@@ -65,25 +87,37 @@ class Pipeline:
 
     async def _run_reduce(self, items: list[dict]) -> dict:
         if len(items) == 1:
+            logger.info("REDUCE: single item, skipping merge")
             return items[0]
 
-        for _ in range(self.config.max_reduce_rounds):
+        logger.info("REDUCE start: %d items  max_rounds=%d", len(items), self.config.max_reduce_rounds)
+        for round_num in range(self.config.max_reduce_rounds):
             if len(items) == 1:
                 break
             group_size = self._adaptive_group_size(items)
+            logger.info("REDUCE round %d: %d items → group_size=%d", round_num + 1, len(items), group_size)
+            t_round = time.monotonic()
             next_items: list[dict] = []
             i = 0
+            group_num = 0
             while i < len(items):
                 group = items[i:i + group_size]
                 i += group_size
                 if len(group) == 1:
                     next_items.append(group[0])
                 else:
+                    group_num += 1
+                    logger.debug("REDUCE round %d group %d: merging %d items", round_num + 1, group_num, len(group))
+                    t_group = time.monotonic()
                     merged = await self._merge_group(group)
                     merged = await self._maybe_compress(merged)
+                    logger.debug("REDUCE round %d group %d done in %.1fs", round_num + 1, group_num, time.monotonic() - t_group)
                     next_items.append(merged)
             items = next_items
+            logger.info("REDUCE round %d done in %.1fs → %d items remaining",
+                        round_num + 1, time.monotonic() - t_round, len(items))
 
+        logger.info("REDUCE complete: 1 item")
         return items[0]
 
     def _adaptive_group_size(self, items: list[dict]) -> int:
@@ -110,14 +144,17 @@ class Pipeline:
 
         except ContextOverflowError:
             if len(group) > 2 and _depth < 10:
+                logger.warning("REDUCE context overflow (depth=%d, group=%d) → splitting in half", _depth, len(group))
                 mid = len(group) // 2
                 left = await self._merge_group(group[:mid], _depth + 1)
                 right = await self._merge_group(group[mid:], _depth + 1)
                 return await self._merge_group([left, right], _depth + 1)
+            logger.warning("REDUCE context overflow on pair (depth=%d) → compress-and-merge", _depth)
             return await self._compress_and_merge(group)
 
         except LLMUnavailableError as exc:
             if self._is_server_down(exc):
+                logger.warning("REDUCE server down → sleeping 30s and retrying")
                 await asyncio.sleep(30)
                 try:
                     return await self.llm.call(system, user, output_schema=self.config.output_schema)
@@ -126,6 +163,7 @@ class Pipeline:
 
             current = list(group)
             for attempt in range(self._MAX_COMPRESS_RETRIES):
+                logger.warning("REDUCE compress retry %d/%d (LLM unavailable)", attempt + 1, self._MAX_COMPRESS_RETRIES)
                 current = [await self._compress(it) for it in current]
                 parts2 = [json.dumps(it, ensure_ascii=False) for it in current]
                 user2 = "\n\n".join(f"### Partial {i+1}\n{p}" for i, p in enumerate(parts2))
@@ -135,9 +173,11 @@ class Pipeline:
                     if self._is_server_down(retry_exc):
                         await asyncio.sleep(30)
                     if attempt == self._MAX_COMPRESS_RETRIES - 1:
+                        logger.error("REDUCE all retries exhausted → programmatic fallback")
                         return self._programmatic_merge(current)
                 except ContextOverflowError:
                     pass
+            logger.error("REDUCE compress loop ended → programmatic fallback")
             return self._programmatic_merge(current)
 
     async def _compress_and_merge(self, group: list[dict]) -> dict:
@@ -161,19 +201,26 @@ class Pipeline:
 
     async def _maybe_compress(self, item: dict) -> dict:
         target_chars = int(self.config.context_tokens * self.config.compression_target_pct / 100) * 3
-        if len(json.dumps(item, ensure_ascii=False)) <= target_chars:
+        size = len(json.dumps(item, ensure_ascii=False))
+        if size <= target_chars:
             return item
+        logger.info("Compressing result: %d chars > target %d chars", size, target_chars)
         return await self._compress(item)
 
     async def _compress(self, item: dict) -> dict:
         user = json.dumps(item, ensure_ascii=False)
+        before = len(user)
         try:
-            return await self.llm.call(
+            result = await self.llm.call(
                 self.config.compress_prompt_template,
                 user,
                 output_schema=self.config.output_schema,
             )
+            after = len(json.dumps(result, ensure_ascii=False))
+            logger.debug("Compress: %d → %d chars (%.0f%%)", before, after, 100 * after / before if before else 0)
+            return result
         except (ContextOverflowError, LLMUnavailableError):
+            logger.warning("Compress failed → returning original")
             return item
 
     def _programmatic_merge(self, items: list[dict]) -> dict:

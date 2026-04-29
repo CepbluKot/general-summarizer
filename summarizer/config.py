@@ -23,6 +23,7 @@ class PipelineConfig:
     max_reduce_rounds: int = 20
     max_retries: int = 3            # -1 = бесконечно
     retry_wait_seconds: int = 60
+    log_file: str | None = None     # путь к файлу лога, None = только stderr
 
     def __post_init__(self) -> None:
         if self.token_budget == 0:
