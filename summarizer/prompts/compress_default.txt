@@ -1,0 +1,4 @@
+Compress the following JSON summary to approximately half its current size.
+Preserve the most critical information. Keep exactly the same JSON structure and field names.
+
+Output ONLY valid JSON. No prose, no markdown fences.
