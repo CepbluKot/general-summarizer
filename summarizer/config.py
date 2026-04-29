@@ -2,9 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-_PROMPT_RESERVE  = 3_000   # токенов на system prompt
-_OUTPUT_RESERVE_PCT = 0.20  # 20% контекста на ответ модели
-_OUTPUT_RESERVE_MAX = 32_000  # не более 32k на ответ
+_PROMPT_RESERVE     = 3_000  # токенов на system prompt
+_OUTPUT_RESERVE_PCT = 0.20   # 20% контекста на ответ модели
+# Нет верхнего предела — при 258k контексте модель получает 51k на ответ
 
 
 @dataclass
@@ -37,7 +37,7 @@ class PipelineConfig:
     max_output_tokens: int = 0  # токенов модели на ответ (передаётся в API)
 
     def __post_init__(self) -> None:
-        output_reserve = min(int(self.context_tokens * _OUTPUT_RESERVE_PCT), _OUTPUT_RESERVE_MAX)
+        output_reserve = int(self.context_tokens * _OUTPUT_RESERVE_PCT)
         data_budget    = max(1000, self.context_tokens - output_reserve - _PROMPT_RESERVE)
         if self.token_budget == 0:
             self.token_budget = data_budget
