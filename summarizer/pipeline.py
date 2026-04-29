@@ -34,6 +34,7 @@ class Pipeline:
             api_key=config.api_key,
             max_retries=config.max_retries,
             retry_wait_seconds=config.retry_wait_seconds,
+            max_output_tokens=config.max_output_tokens,
         )
 
     async def run(self, rows: list[str]) -> dict:

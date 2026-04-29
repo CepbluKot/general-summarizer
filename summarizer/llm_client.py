@@ -38,6 +38,7 @@ class LLMClient:
         timeout: float = 120.0,
         max_retries: int = 3,
         retry_wait_seconds: float = 60.0,
+        max_output_tokens: int | None = None,
     ) -> None:
         self.model = model
         self.api_base = api_base.rstrip("/")
@@ -45,6 +46,7 @@ class LLMClient:
         self.timeout = timeout
         self.max_retries = max_retries          # -1 = infinite
         self.retry_wait_seconds = retry_wait_seconds
+        self.max_output_tokens = max_output_tokens  # None = модельный дефолт
         self._http_client = httpx.AsyncClient(verify=False)
 
     async def call(self, system: str, user: str, output_schema: dict | None = None) -> dict:
@@ -116,7 +118,7 @@ class LLMClient:
         client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
         response_model = _make_json_schema_response_model(output_schema)
 
-        response = await client.chat.completions.create(
+        kwargs: dict = dict(
             model=self.model,
             messages=[
                 {
@@ -129,6 +131,10 @@ class LLMClient:
             temperature=0.2,
             max_retries=self.max_retries,
         )
+        if self.max_output_tokens is not None:
+            kwargs["max_tokens"] = self.max_output_tokens
+
+        response = await client.chat.completions.create(**kwargs)
         return _model_to_dict(response)
 
 
