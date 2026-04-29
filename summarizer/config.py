@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -17,7 +17,11 @@ class PipelineConfig:
     api_key: str
     output_path: str | None
     map_concurrency: int = 5
-    token_budget: int = 6000
     context_tokens: int = 32000
+    token_budget: int = 0           # 0 = автоматически context_tokens // 2
     compression_target_pct: int = 30
     max_reduce_rounds: int = 20
+
+    def __post_init__(self) -> None:
+        if self.token_budget == 0:
+            self.token_budget = self.context_tokens // 2

@@ -215,10 +215,6 @@ async def main():
     rows = [json.dumps(r, ensure_ascii=False, default=str) for r in all_rows]
     print(f"Total: {len(rows)} rows", file=sys.stderr)
 
-    # token_budget = сколько токенов на один MAP-батч
-    # ~35% контекста: оставляем место под промпт + ответ модели
-    token_budget = int(LLM_CONTEXT_TOKENS * 0.35)
-
     config = PipelineConfig(
         input_path="",
         format="json",
@@ -232,7 +228,6 @@ async def main():
         api_base=LLM_API_BASE,
         api_key=LLM_API_KEY,
         output_path=OUTPUT_FILE,
-        token_budget=token_budget,
         context_tokens=LLM_CONTEXT_TOKENS,
     )
 
