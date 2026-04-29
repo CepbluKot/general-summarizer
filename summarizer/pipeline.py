@@ -26,6 +26,8 @@ class Pipeline:
             model=config.model,
             api_base=config.api_base,
             api_key=config.api_key,
+            max_retries=config.max_retries,
+            retry_wait_seconds=config.retry_wait_seconds,
         )
 
     async def run(self, rows: list[str]) -> dict:

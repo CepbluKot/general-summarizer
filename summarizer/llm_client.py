@@ -33,12 +33,14 @@ class LLMClient:
         api_key: str,
         timeout: float = 120.0,
         max_retries: int = 3,
+        retry_wait_seconds: float = 60.0,
     ) -> None:
         self.model = model
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self.max_retries = max_retries
+        self.max_retries = max_retries          # -1 = infinite
+        self.retry_wait_seconds = retry_wait_seconds
         self._http_client = httpx.AsyncClient(verify=False)
 
     async def call(self, system: str, user: str, output_schema: dict | None = None) -> dict:
@@ -48,7 +50,8 @@ class LLMClient:
             ContextOverflowError: Context window exceeded.
             LLMUnavailableError: Timeout, connection error, or 5xx.
         """
-        for attempt in range(self.max_retries + 1):
+        attempt = 0
+        while True:
             try:
                 return await self._create(system, user, output_schema)
             except openai.BadRequestError as e:
@@ -56,26 +59,27 @@ class LLMClient:
                 if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
                     raise ContextOverflowError(str(e)) from e
                 raise
-            except openai.RateLimitError as e:
-                if attempt == self.max_retries:
+            except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError) as e:
+                if self.max_retries != -1 and attempt >= self.max_retries:
                     raise LLMUnavailableError(str(e)) from e
-                wait = 60 * (2 ** attempt)   # 60s → 120s → 240s
-                await asyncio.sleep(wait)
-            except (openai.APITimeoutError, openai.APIConnectionError) as e:
-                raise LLMUnavailableError(str(e)) from e
+                await asyncio.sleep(self.retry_wait_seconds)
+                attempt += 1
             except openai.APIStatusError as e:
                 if e.status_code in (502, 503):
-                    raise LLMUnavailableError(str(e)) from e
-                raise
-            except InstructorRetryException as e:
-                if "429" in str(e) or "rate limit" in str(e).lower():
-                    if attempt == self.max_retries:
+                    if self.max_retries != -1 and attempt >= self.max_retries:
                         raise LLMUnavailableError(str(e)) from e
-                    wait = 60 * (2 ** attempt)
-                    await asyncio.sleep(wait)
+                    await asyncio.sleep(self.retry_wait_seconds)
+                    attempt += 1
+                else:
+                    raise
+            except InstructorRetryException as e:
+                if "429" in str(e) or "rate limit" in str(e).lower() or "timeout" in str(e).lower():
+                    if self.max_retries != -1 and attempt >= self.max_retries:
+                        raise LLMUnavailableError(str(e)) from e
+                    await asyncio.sleep(self.retry_wait_seconds)
+                    attempt += 1
                 else:
                     raise LLMUnavailableError(str(e)) from e
-        raise LLMUnavailableError("max retries exceeded")
 
     async def _create(self, system: str, user: str, output_schema: dict | None = None) -> dict:
         """Make the actual API call. Separated for easy mocking in tests."""

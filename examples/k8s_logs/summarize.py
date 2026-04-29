@@ -28,6 +28,8 @@ LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в т
                               # от него зависит размер батча (MAP) и когда сжимать (REDUCE)
 MAP_CONCURRENCY    = 3       # сколько батчей обрабатывается параллельно
                               # уменьши до 1-2 если получаешь 429 rate limit
+MAX_RETRIES        = -1      # попыток при ошибке (-1 = бесконечно)
+RETRY_WAIT_SECONDS = 60      # секунд между попытками
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
 
@@ -232,6 +234,8 @@ async def main():
         output_path=OUTPUT_FILE,
         context_tokens=LLM_CONTEXT_TOKENS,
         map_concurrency=MAP_CONCURRENCY,
+        max_retries=MAX_RETRIES,
+        retry_wait_seconds=RETRY_WAIT_SECONDS,
     )
 
     pipeline = Pipeline(config)

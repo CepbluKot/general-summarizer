@@ -21,6 +21,8 @@ class PipelineConfig:
     token_budget: int = 0           # 0 = автоматически context_tokens // 2
     compression_target_pct: int = 30
     max_reduce_rounds: int = 20
+    max_retries: int = 3            # -1 = бесконечно
+    retry_wait_seconds: int = 60
 
     def __post_init__(self) -> None:
         if self.token_budget == 0:
