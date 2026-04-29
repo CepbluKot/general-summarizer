@@ -18,14 +18,17 @@ class PipelineConfig:
     output_path: str | None
     map_concurrency: int = 5
     context_tokens: int = 32000
-    token_budget: int = 0           # 0 = автоматически context_tokens // 2
-    compression_target_pct: int = 30
+    token_budget: int = 0      # 0 = автоматически context_tokens // 2
     max_reduce_rounds: int = 20
-    max_retries: int = 3            # -1 = бесконечно
+    max_retries: int = 3       # -1 = бесконечно
     retry_wait_seconds: int = 60
-    max_output_tokens: int | None = None  # None = дефолт модели (часто мало!), рекомендуется 8192+
-    pre_compress_chars: int = 50000 # если суммарный payload группы > N символов — сжимаем до мержа
-    log_file: str | None = None     # путь к файлу лога, None = только stderr
+    max_output_tokens: int | None = None  # None = дефолт модели, рекомендуется 8192+
+    log_file: str | None = None
+
+    # Автоматические пороги (вычисляются из context_tokens, не задаются руками):
+    # pre_compress_threshold = context_tokens * 0.55  — сжать группу до мержа если не влезает
+    # compress_trigger       = context_tokens * 0.30  — сжать результат если слишком большой
+    # Компрессия всегда целится в 50% от входного размера.
 
     def __post_init__(self) -> None:
         if self.token_budget == 0:

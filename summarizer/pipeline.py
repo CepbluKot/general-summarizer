@@ -141,11 +141,12 @@ class Pipeline:
 
     async def _merge_group(self, group: list[dict], _depth: int = 0) -> dict:
         """Merge a group of partial results via LLM with full error handling."""
-        # Pre-compress: если суммарный payload слишком большой — сжимаем до мержа
-        payload_size = sum(len(json.dumps(it, ensure_ascii=False)) for it in group)
-        if payload_size > self.config.pre_compress_chars:
-            logger.info("Pre-compressing group (depth=%d): payload=%d chars > threshold=%d",
-                        _depth, payload_size, self.config.pre_compress_chars)
+        # Pre-compress: если суммарный payload группы не влезает в REDUCE-бюджет (55% контекста)
+        pre_compress_threshold = int(self.config.context_tokens * 0.55)
+        payload_tokens = sum(estimate_tokens(json.dumps(it, ensure_ascii=False)) for it in group)
+        if payload_tokens > pre_compress_threshold:
+            logger.info("Pre-compressing group (depth=%d): payload=%d tok > threshold=%d tok",
+                        _depth, payload_tokens, pre_compress_threshold)
             group = [await self._compress(it) for it in group]
 
         system = _fmt(
@@ -218,24 +219,26 @@ class Pipeline:
         return self._programmatic_merge(items)
 
     async def _maybe_compress(self, item: dict) -> dict:
-        target_chars = int(self.config.context_tokens * self.config.compression_target_pct / 100) * 3
-        size = len(json.dumps(item, ensure_ascii=False))
-        if size <= target_chars:
+        # Сжимаем если результат мержа занимает > 30% контекста
+        trigger_tokens = int(self.config.context_tokens * 0.30)
+        item_tokens = estimate_tokens(json.dumps(item, ensure_ascii=False))
+        if item_tokens <= trigger_tokens:
             return item
-        logger.info("Compressing result: %d chars > target %d chars", size, target_chars)
+        logger.info("Compressing result: %d tok > trigger %d tok (30%% of context)", item_tokens, trigger_tokens)
         return await self._compress(item)
 
     async def _compress(self, item: dict) -> dict:
-        user = json.dumps(item, ensure_ascii=False)
-        before = len(user)
+        serialized = json.dumps(item, ensure_ascii=False)
+        before_tokens = estimate_tokens(serialized)
+        target_tokens = max(1, before_tokens // 2)
+        system = self.config.compress_prompt_template + (
+            f"\n\nTarget size: approximately {target_tokens} tokens (half of current {before_tokens} tokens)."
+        )
         try:
-            result = await self.llm.call(
-                self.config.compress_prompt_template,
-                user,
-                output_schema=self.config.output_schema,
-            )
-            after = len(json.dumps(result, ensure_ascii=False))
-            logger.debug("Compress: %d → %d chars (%.0f%%)", before, after, 100 * after / before if before else 0)
+            result = await self.llm.call(system, serialized, output_schema=self.config.output_schema)
+            after_tokens = estimate_tokens(json.dumps(result, ensure_ascii=False))
+            logger.debug("Compress: %d → %d tok (%.0f%%)", before_tokens, after_tokens,
+                         100 * after_tokens / before_tokens if before_tokens else 0)
             return result
         except (ContextOverflowError, LLMUnavailableError):
             logger.warning("Compress failed → returning original")
