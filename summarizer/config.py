@@ -36,11 +36,9 @@ class PipelineConfig:
     max_output_tokens: int = 0  # токенов модели на ответ (передаётся в API)
 
     def __post_init__(self) -> None:
-        # Резервируем на ответ: 16k фиксировано, но не больше 30% контекста
-        # (при маленьком контексте 16k может быть много)
-        output_reserve = min(_OUTPUT_RESERVE, int(self.context_tokens * 0.30))
-        data_budget    = max(1000, self.context_tokens - output_reserve - _PROMPT_RESERVE)
-        if self.token_budget == 0:
-            self.token_budget = data_budget
+        # Если max_output_tokens задан явно — используем его
+        # Иначе — авто: 32k или 30% контекста (что меньше)
         if self.max_output_tokens == 0:
-            self.max_output_tokens = output_reserve
+            self.max_output_tokens = min(_OUTPUT_RESERVE, int(self.context_tokens * 0.30))
+        if self.token_budget == 0:
+            self.token_budget = max(1000, self.context_tokens - self.max_output_tokens - _PROMPT_RESERVE)

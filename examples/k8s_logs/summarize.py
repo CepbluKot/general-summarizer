@@ -24,8 +24,9 @@ MAX_ROWS      = 5000   # сколько строк выгружать из БД 
 LLM_API_BASE       = "https://localhost:8000"
 LLM_API_KEY        = "sk-placeholder"
 LLM_MODEL          = "qwen2.5-72b-instruct"
-LLM_CONTEXT_TOKENS = 32000  # размер контекста модели в токенах
-                              # от него зависит размер батча (MAP) и когда сжимать (REDUCE)
+LLM_CONTEXT_TOKENS = 262000  # полный контекст модели в токенах
+LLM_OUTPUT_TOKENS  = 32768   # сколько токенов выделяем на ответ модели
+                              # на данные уйдёт: context - output - ~3k на промпт
 MAP_CONCURRENCY    = 3       # сколько батчей обрабатывается параллельно
                               # уменьши до 1-2 если получаешь 429 rate limit
 MAX_RETRIES        = -1      # попыток при ошибке (-1 = бесконечно)
@@ -235,6 +236,7 @@ async def main():
         api_key=LLM_API_KEY,
         output_path=OUTPUT_FILE,
         context_tokens=LLM_CONTEXT_TOKENS,
+        max_output_tokens=LLM_OUTPUT_TOKENS,
         map_concurrency=MAP_CONCURRENCY,
         max_retries=MAX_RETRIES,
         retry_wait_seconds=RETRY_WAIT_SECONDS,
