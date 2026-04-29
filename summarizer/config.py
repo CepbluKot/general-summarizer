@@ -1,12 +1,17 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+
+_PROMPT_RESERVE  = 3_000   # токенов на system prompt
+_OUTPUT_RESERVE_PCT = 0.20  # 20% контекста на ответ модели
+_OUTPUT_RESERVE_MAX = 32_000  # не более 32k на ответ
 
 
 @dataclass
 class PipelineConfig:
     input_path: str
-    format: str                     # "json" | "text"
-    schema_hint: str                # "" if text format
+    format: str          # "json" | "text"
+    schema_hint: str     # "" если text
     user_prompt: str
     output_schema: dict
     map_prompt_template: str
@@ -17,27 +22,24 @@ class PipelineConfig:
     api_key: str
     output_path: str | None
     map_concurrency: int = 5
-    context_tokens: int = 32000
-    token_budget: int = 0      # 0 = автоматически context_tokens // 2
+    context_tokens: int = 32000   # ЕДИНСТВЕННЫЙ параметр контекста:
+                                   # полный размер окна модели в токенах.
+                                   # Бюджеты MAP/REDUCE/output считаются автоматически.
     max_reduce_rounds: int = 20
-    max_retries: int = 3       # -1 = бесконечно
+    max_retries: int = 3           # -1 = бесконечно
     retry_wait_seconds: int = 60
-    llm_timeout: int = 10800  # таймаут одного LLM-вызова в секундах (default 3 часа)
-    max_output_tokens: int | None = None  # None = дефолт модели, рекомендуется 8192+
-    runs_dir: str | None = "runs"        # папка для артефактов прогона; None = не сохранять
+    llm_timeout: int = 10800       # таймаут одного LLM-вызова (сек), default 3 часа
+    runs_dir: str | None = "runs"  # папка артефактов; None = не сохранять
     log_file: str | None = None
 
-    # Автоматические пороги (вычисляются из context_tokens, не задаются руками):
-    # pre_compress_threshold = context_tokens * 0.55  — сжать группу до мержа если не влезает
-    # compress_trigger       = context_tokens * 0.30  — сжать результат если слишком большой
-    # Компрессия всегда целится в 50% от входного размера.
+    # Вычисляемые поля (заполняются в __post_init__, не задаются вручную)
+    token_budget: int = 0       # токенов на данные в одном MAP/REDUCE вызове
+    max_output_tokens: int = 0  # токенов модели на ответ (передаётся в API)
 
     def __post_init__(self) -> None:
+        output_reserve = min(int(self.context_tokens * _OUTPUT_RESERVE_PCT), _OUTPUT_RESERVE_MAX)
+        data_budget    = max(1000, self.context_tokens - output_reserve - _PROMPT_RESERVE)
         if self.token_budget == 0:
-            if self.max_output_tokens is not None:
-                # Знаем размер ответа — точно считаем бюджет:
-                # context - output - 3000 (запас на system prompt + schema)
-                self.token_budget = max(1000, self.context_tokens - self.max_output_tokens - 3000)
-            else:
-                # Размер ответа неизвестен — как в оригинале: 55% на данные
-                self.token_budget = int(self.context_tokens * 0.55)
+            self.token_budget = data_budget
+        if self.max_output_tokens == 0:
+            self.max_output_tokens = output_reserve

@@ -48,7 +48,7 @@ class Pipeline:
             timeout=config.llm_timeout,
             max_retries=config.max_retries,
             retry_wait_seconds=config.retry_wait_seconds,
-            max_output_tokens=config.max_output_tokens,
+            max_output_tokens=config.max_output_tokens,  # вычислен в PipelineConfig.__post_init__
             audit_dir=self._run_dir / "llm" if self._run_dir else None,
         )
 
@@ -66,8 +66,9 @@ class Pipeline:
         logger.info("GENERAL SUMMARIZER PIPELINE")
         logger.info("  Модель        : %s", cfg.model)
         logger.info("  API           : %s", cfg.api_base)
-        logger.info("  Контекст      : %d токенов", cfg.context_tokens)
-        logger.info("  Бюджет батча  : %d токенов", cfg.token_budget)
+        logger.info("  Контекст      : %d токенов  (модель)", cfg.context_tokens)
+        logger.info("  Данные/батч   : %d токенов  (%.0f%%)", cfg.token_budget, 100*cfg.token_budget/cfg.context_tokens)
+        logger.info("  Ответ модели  : %d токенов  (%.0f%%)", cfg.max_output_tokens, 100*cfg.max_output_tokens/cfg.context_tokens)
         logger.info("  Параллельность: %d", cfg.map_concurrency)
         logger.info("  Артефакты     : %s", str(self._run_dir) if self._run_dir else "отключено")
         logger.info(SEP)

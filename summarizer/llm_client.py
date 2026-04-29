@@ -176,7 +176,7 @@ class LLMClient:
             temperature=0.2,
             max_retries=self.max_retries,
         )
-        if self.max_output_tokens is not None:
+        if self.max_output_tokens:
             kwargs["max_tokens"] = self.max_output_tokens
 
         response = await client.chat.completions.create(**kwargs)
