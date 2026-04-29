@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
+import threading
 import time
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
@@ -39,14 +41,17 @@ class LLMClient:
         max_retries: int = 3,
         retry_wait_seconds: float = 60.0,
         max_output_tokens: int | None = None,
+        audit_dir: "Path | None" = None,
     ) -> None:
         self.model = model
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self.max_retries = max_retries          # -1 = infinite
+        self.max_retries = max_retries
         self.retry_wait_seconds = retry_wait_seconds
-        self.max_output_tokens = max_output_tokens  # None = модельный дефолт
+        self.max_output_tokens = max_output_tokens
+        self.audit_dir = audit_dir
+        self._call_counter = 0
         self._http_client = httpx.AsyncClient(verify=False)
 
     async def call(self, system: str, user: str, output_schema: dict | None = None) -> dict:
@@ -58,8 +63,11 @@ class LLMClient:
         """
         sys_tokens  = len(system) // 3
         user_tokens = len(user) // 3
-        logger.debug("LLM call  system=%d tok  user=%d tok  total=%d tok",
-                     sys_tokens, user_tokens, sys_tokens + user_tokens)
+        n = self._next_call_n()
+        logger.debug("LLM call #%04d  system=%d tok  user=%d tok  total=%d tok",
+                     n, sys_tokens, user_tokens, sys_tokens + user_tokens)
+        self._audit_save(n, "system", system)
+        self._audit_save(n, "user",   user)
 
         attempt = 0
         while True:
@@ -68,7 +76,9 @@ class LLMClient:
                 result = await self._create(system, user, output_schema)
                 elapsed = time.monotonic() - t0
                 out_tokens = len(json.dumps(result, ensure_ascii=False)) // 3
-                logger.debug("LLM ok  attempt=%d  %.1fs  out=%d tok", attempt + 1, elapsed, out_tokens)
+                result_str = json.dumps(result, ensure_ascii=False, indent=2)
+                self._audit_save(n, "response", result_str)
+                logger.debug("LLM #%04d ok  attempt=%d  %.1fs  out=%d tok", n, attempt + 1, elapsed, out_tokens)
                 return result
             except openai.BadRequestError as e:
                 msg = str(e).lower()
@@ -105,6 +115,17 @@ class LLMClient:
                 else:
                     logger.error("LLM instructor error (attempt %d): %s", attempt + 1, str(e)[:300])
                     raise LLMUnavailableError(str(e)) from e
+
+    def _next_call_n(self) -> int:
+        self._call_counter += 1
+        return self._call_counter
+
+    def _audit_save(self, n: int, kind: str, content: str) -> None:
+        if self.audit_dir is None:
+            return
+        self.audit_dir.mkdir(parents=True, exist_ok=True)
+        path = self.audit_dir / f"call_{n:04d}_{kind}.txt"
+        path.write_text(content, encoding="utf-8")
 
     async def _create(self, system: str, user: str, output_schema: dict | None = None) -> dict:
         """Make the actual API call. Separated for easy mocking in tests."""

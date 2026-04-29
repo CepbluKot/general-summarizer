@@ -23,6 +23,7 @@ class PipelineConfig:
     max_retries: int = 3       # -1 = бесконечно
     retry_wait_seconds: int = 60
     max_output_tokens: int | None = None  # None = дефолт модели, рекомендуется 8192+
+    runs_dir: str | None = "runs"        # папка для артефактов прогона; None = не сохранять
     log_file: str | None = None
 
     # Автоматические пороги (вычисляются из context_tokens, не задаются руками):

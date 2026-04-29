@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime
+from pathlib import Path
 from summarizer.chunker import chunk, estimate_tokens
 from summarizer.config import PipelineConfig
 from summarizer.llm_client import ContextOverflowError, LLMClient, LLMUnavailableError
-from summarizer.log import get as _log
+from summarizer.log import get as _log, SEP, SEP2
 
 logger = _log("pipeline")
 
@@ -28,6 +30,17 @@ class Pipeline:
         self.config = config
         from summarizer.log import setup as _setup
         _setup(config.log_file)
+
+        # Создаём директорию артефактов для этого прогона
+        self._run_dir: Path | None = None
+        if config.runs_dir:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._run_dir = Path(config.runs_dir) / ts
+            self._run_dir.mkdir(parents=True, exist_ok=True)
+            (self._run_dir / "map").mkdir()
+            (self._run_dir / "reduce").mkdir()
+            (self._run_dir / "llm").mkdir()
+
         self.llm = LLMClient(
             model=config.model,
             api_base=config.api_base,
@@ -35,24 +48,53 @@ class Pipeline:
             max_retries=config.max_retries,
             retry_wait_seconds=config.retry_wait_seconds,
             max_output_tokens=config.max_output_tokens,
+            audit_dir=self._run_dir / "llm" if self._run_dir else None,
         )
+
+    def _save(self, subdir: str, name: str, data: dict | list) -> Path | None:
+        if self._run_dir is None:
+            return None
+        path = self._run_dir / subdir / name
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
 
     async def run(self, rows: list[str]) -> dict:
         t0 = time.monotonic()
-        logger.info("Pipeline start: %d rows  token_budget=%d  context_tokens=%d  concurrency=%d",
-                    len(rows), self.config.token_budget, self.config.context_tokens, self.config.map_concurrency)
+        cfg = self.config
+        logger.info(SEP)
+        logger.info("GENERAL SUMMARIZER PIPELINE")
+        logger.info("  Модель        : %s", cfg.model)
+        logger.info("  API           : %s", cfg.api_base)
+        logger.info("  Контекст      : %d токенов", cfg.context_tokens)
+        logger.info("  Бюджет батча  : %d токенов", cfg.token_budget)
+        logger.info("  Параллельность: %d", cfg.map_concurrency)
+        logger.info("  Артефакты     : %s", str(self._run_dir) if self._run_dir else "отключено")
+        logger.info(SEP)
+
         partials = await self._run_map(rows)
-        logger.info("MAP done: %d partials in %.1fs", len(partials), time.monotonic() - t0)
+
+        logger.info("")
         result = await self._run_reduce(partials)
-        logger.info("Pipeline done in %.1fs", time.monotonic() - t0)
+
+        if self._run_dir:
+            p = self._save("", "result.json", result)
+            logger.info(SEP)
+            logger.info("Готово за %.1fс  →  %s", time.monotonic() - t0, p)
+        else:
+            logger.info(SEP)
+            logger.info("Готово за %.1fс", time.monotonic() - t0)
+        logger.info(SEP)
         return result
 
     # ── MAP ───────────────────────────────────────────────────────────
 
     async def _run_map(self, rows: list[str]) -> list[dict]:
         chunks = chunk(rows, self.config.token_budget)
-        logger.info("MAP: %d rows → %d chunks  (token_budget=%d, concurrency=%d)",
-                    len(rows), len(chunks), self.config.token_budget, self.config.map_concurrency)
+        logger.info("СТАДИЯ 1  ▶  MAP")
+        logger.info("  Строк всего   : %d", len(rows))
+        logger.info("  Чанков        : %d", len(chunks))
+        logger.info("  Бюджет чанка  : %d токенов", self.config.token_budget)
+        t_map = time.monotonic()
         sem = asyncio.Semaphore(self.config.map_concurrency)
         chunk_idx = [0]
 
@@ -61,13 +103,18 @@ class Pipeline:
                 idx = chunk_idx[0]
                 chunk_idx[0] += 1
                 tok = sum(estimate_tokens(r) for r in ch)
-                logger.debug("MAP chunk %d/%d  rows=%d  tokens~%d", idx + 1, len(chunks), len(ch), tok)
+                logger.info("  MAP  %d/%d  строк=%d  токенов~%d", idx + 1, len(chunks), len(ch), tok)
                 t = time.monotonic()
                 result = await self._map_chunk(ch)
-                logger.debug("MAP chunk %d/%d done in %.1fs", idx + 1, len(chunks), time.monotonic() - t)
+                p = self._save("map", f"chunk_{idx:03d}.json", result)
+                logger.info("  MAP  %d/%d  ✓  %.1fс%s",
+                            idx + 1, len(chunks), time.monotonic() - t,
+                            f"  →  {p}" if p else "")
                 return result
 
-        return list(await asyncio.gather(*[process(ch) for ch in chunks]))
+        results = list(await asyncio.gather(*[process(ch) for ch in chunks]))
+        logger.info("СТАДИЯ 1  ✓  MAP завершён за %.1fс  (%d результатов)", time.monotonic() - t_map, len(results))
+        return results
 
     async def _map_chunk(self, rows: list[str], _depth: int = 0) -> dict:
         schema_hint = self.config.schema_hint
@@ -98,15 +145,22 @@ class Pipeline:
 
     async def _run_reduce(self, items: list[dict]) -> dict:
         if len(items) == 1:
-            logger.info("REDUCE: single item, skipping merge")
+            logger.info("СТАДИЯ 2  ▶  REDUCE — один элемент, merge не нужен")
             return items[0]
 
-        logger.info("REDUCE start: %d items  max_rounds=%d", len(items), self.config.max_reduce_rounds)
+        logger.info("СТАДИЯ 2  ▶  REDUCE")
+        logger.info("  Элементов     : %d", len(items))
+        logger.info("  Макс раундов  : %d", self.config.max_reduce_rounds)
+        t_reduce = time.monotonic()
+
         for round_num in range(self.config.max_reduce_rounds):
             if len(items) == 1:
                 break
             group_size = self._adaptive_group_size(items)
-            logger.info("REDUCE round %d: %d items → group_size=%d", round_num + 1, len(items), group_size)
+            n_groups = sum(1 for i in range(0, len(items), group_size) if len(items[i:i+group_size]) > 1)
+            logger.info("  %s", SEP2)
+            logger.info("  REDUCE раунд %d  |  %d элементов → %d групп по %d",
+                        round_num + 1, len(items), n_groups, group_size)
             t_round = time.monotonic()
             next_items: list[dict] = []
             i = 0
@@ -118,17 +172,19 @@ class Pipeline:
                     next_items.append(group[0])
                 else:
                     group_num += 1
-                    logger.debug("REDUCE round %d group %d: merging %d items", round_num + 1, group_num, len(group))
                     t_group = time.monotonic()
                     merged = await self._merge_group(group)
                     merged = await self._maybe_compress(merged)
-                    logger.debug("REDUCE round %d group %d done in %.1fs", round_num + 1, group_num, time.monotonic() - t_group)
+                    p = self._save("reduce", f"round_{round_num+1:02d}_group_{group_num:02d}.json", merged)
+                    logger.info("  MERGE  раунд %d  группа %d/%d  ✓  %.1fс%s",
+                                round_num + 1, group_num, n_groups, time.monotonic() - t_group,
+                                f"  →  {p}" if p else "")
                     next_items.append(merged)
             items = next_items
-            logger.info("REDUCE round %d done in %.1fs → %d items remaining",
+            logger.info("  REDUCE раунд %d  ✓  %.1fс  →  осталось: %d",
                         round_num + 1, time.monotonic() - t_round, len(items))
 
-        logger.info("REDUCE complete: 1 item")
+        logger.info("СТАДИЯ 2  ✓  REDUCE завершён за %.1fс  →  1 результат", time.monotonic() - t_reduce)
         return items[0]
 
     def _adaptive_group_size(self, items: list[dict]) -> int:
