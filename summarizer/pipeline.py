@@ -31,11 +31,18 @@ class Pipeline:
         from summarizer.log import setup as _setup
         _setup(config.log_file)
 
-        # Создаём директорию артефактов для этого прогона
+        # Директория артефактов: resume или новая
         self._run_dir: Path | None = None
+        self._resuming = False
         if config.runs_dir:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._run_dir = Path(config.runs_dir) / ts
+            if config.resume_run:
+                self._run_dir = Path(config.runs_dir) / config.resume_run
+                if not self._run_dir.exists():
+                    raise FileNotFoundError(f"Resume run directory not found: {self._run_dir}")
+                self._resuming = True
+            else:
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._run_dir = Path(config.runs_dir) / ts
             self._run_dir.mkdir(parents=True, exist_ok=True)
             (self._run_dir / "map").mkdir(exist_ok=True)
             (self._run_dir / "reduce").mkdir(exist_ok=True)
@@ -72,6 +79,8 @@ class Pipeline:
         logger.info("  Режим         : %s", cfg.output_mode)
         logger.info("  Параллельность: %d", cfg.map_concurrency)
         logger.info("  Артефакты     : %s", str(self._run_dir) if self._run_dir else "отключено")
+        if self._resuming:
+            logger.info("  RESUME        : продолжаем с %s", self._run_dir)
         logger.info(SEP)
 
         if cfg.output_mode == "text":
@@ -136,6 +145,12 @@ class Pipeline:
             async with sem:
                 idx = chunk_idx[0]
                 chunk_idx[0] += 1
+                # Resume: загружаем если уже посчитан
+                if self._run_dir:
+                    saved = self._run_dir / "map" / f"chunk_{idx:03d}.json"
+                    if saved.exists():
+                        logger.info("  MAP  %d/%d  SKIP  (загружен из %s)", idx + 1, len(chunks), saved)
+                        return json.loads(saved.read_text(encoding="utf-8"))
                 tok = sum(estimate_tokens(r) for r in ch)
                 logger.info("  MAP  %d/%d  строк=%d  токенов~%d", idx + 1, len(chunks), len(ch), tok)
                 t = time.monotonic()
@@ -168,6 +183,23 @@ class Pipeline:
 
     # ── REDUCE ────────────────────────────────────────────────────────
 
+    def _save_reduce_checkpoint(self, round_num: int, items: list[dict]) -> None:
+        if self._run_dir is None:
+            return
+        p = self._run_dir / "reduce" / "checkpoint.json"
+        p.write_text(json.dumps({"round": round_num, "items": items}, ensure_ascii=False), encoding="utf-8")
+
+    def _load_reduce_checkpoint(self) -> tuple[int, list[dict]] | None:
+        if self._run_dir is None or not self._resuming:
+            return None
+        p = self._run_dir / "reduce" / "checkpoint.json"
+        if not p.exists():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        logger.info("  RESUME REDUCE: загружен checkpoint раунда %d (%d элементов)",
+                    data["round"], len(data["items"]))
+        return data["round"], data["items"]
+
     async def _run_reduce(self, items: list[dict]) -> dict:
         if len(items) == 1:
             logger.info("СТАДИЯ 2  ▶  REDUCE — один элемент, merge не нужен")
@@ -178,7 +210,13 @@ class Pipeline:
         logger.info("  Макс раундов  : %d", self.config.max_reduce_rounds)
         t_reduce = time.monotonic()
 
-        for round_num in range(self.config.max_reduce_rounds):
+        # Resume: загружаем checkpoint если есть
+        start_round = 0
+        checkpoint = self._load_reduce_checkpoint()
+        if checkpoint is not None:
+            start_round, items = checkpoint
+
+        for round_num in range(start_round, self.config.max_reduce_rounds):
             if len(items) == 1:
                 break
             group_size = self._adaptive_group_size(items)
@@ -197,6 +235,14 @@ class Pipeline:
                     next_items.append(group[0])
                 else:
                     group_num += 1
+                    # Resume: загружаем если уже посчитано
+                    if self._run_dir:
+                        saved = self._run_dir / "reduce" / f"round_{round_num+1:02d}_group_{group_num:02d}.json"
+                        if saved.exists():
+                            logger.info("  MERGE  раунд %d  группа %d/%d  SKIP  (загружен)",
+                                        round_num + 1, group_num, n_groups)
+                            next_items.append(json.loads(saved.read_text(encoding="utf-8")))
+                            continue
                     t_group = time.monotonic()
                     merged = await self._merge_group(group)
                     merged = await self._maybe_compress(merged)
@@ -206,7 +252,8 @@ class Pipeline:
                                 f"  →  {p}" if p else "")
                     next_items.append(merged)
             items = next_items
-            logger.info("  REDUCE раунд %d  ✓  %.1fс  →  осталось: %d",
+            self._save_reduce_checkpoint(round_num + 1, items)
+            logger.info("  REDUCE раунд %d  ✓  %.1fс  →  осталось: %d  (checkpoint сохранён)",
                         round_num + 1, time.monotonic() - t_round, len(items))
 
         logger.info("СТАДИЯ 2  ✓  REDUCE завершён за %.1fс  →  1 результат", time.monotonic() - t_reduce)

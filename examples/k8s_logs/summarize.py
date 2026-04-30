@@ -56,6 +56,8 @@ REPORT_FORMAT = ReportFormat.DETAILED   # влияет на промпты (см
 
 OUTPUT_FILE   = "examples/k8s_logs/result.json"   # None → stdout
 LOG_FILE      = "examples/k8s_logs/run.log"        # None → только stderr
+RESUME_RUN    = None  # "20260430_100000" — продолжить упавший запуск
+                      # найди имя папки в runs/ и укажи сюда
 
 MAP_PROMPT = """You are a senior SRE analyzing a Kubernetes log fragment during an incident.
 
@@ -261,6 +263,7 @@ async def main():
         max_retries=MAX_RETRIES,
         retry_wait_seconds=RETRY_WAIT_SECONDS,
         llm_timeout=LLM_TIMEOUT,
+        resume_run=RESUME_RUN,
         log_file=LOG_FILE,
     )
 

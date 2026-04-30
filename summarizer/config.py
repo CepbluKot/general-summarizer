@@ -29,7 +29,9 @@ class PipelineConfig:
     max_retries: int = 3           # -1 = бесконечно
     retry_wait_seconds: int = 60
     llm_timeout: int = 10800       # таймаут одного LLM-вызова (сек), default 3 часа
-    runs_dir: str | None = "runs"  # папка артефактов; None = не сохранять
+    runs_dir: str | None = "runs"    # папка артефактов; None = не сохранять
+    resume_run: str | None = None    # имя папки предыдущего запуска для resume
+                                     # например: "20260430_100000"
     log_file: str | None = None
 
     # Вычисляемые поля (заполняются в __post_init__, не задаются вручную)
