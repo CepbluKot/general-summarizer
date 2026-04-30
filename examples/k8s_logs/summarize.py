@@ -281,8 +281,6 @@ async def main():
     if out_file:
         Path(out_file).write_text(output, encoding="utf-8")
         print(f"Result → {out_file}", file=sys.stderr)
-    else:
-        print(output)
 
 
 if __name__ == "__main__":
