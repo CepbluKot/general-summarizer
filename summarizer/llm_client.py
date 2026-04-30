@@ -150,6 +150,73 @@ class LLMClient:
                                  n, attempt + 1, err_str[:300])
                     raise LLMUnavailableError(err_str) from e
 
+    async def call_text(self, system: str, user: str) -> str:
+        """Call LLM and return raw text response (no schema, no instructor validation).
+
+        Raises:
+            ContextOverflowError: Context window exceeded.
+            LLMUnavailableError: Timeout, connection error, or 5xx.
+        """
+        n = self._next_call_n()
+        sys_tokens  = len(system) // 2
+        user_tokens = len(user) // 2
+        logger.debug("LLM call_text #%04d  system=%d tok  user=%d tok", n, sys_tokens, user_tokens)
+        self._audit_save(n, "system", system)
+        self._audit_save(n, "user",   user)
+
+        attempt = 0
+        while True:
+            t0 = time.monotonic()
+            try:
+                openai_client = openai.AsyncOpenAI(
+                    api_key=self.api_key,
+                    base_url=self.api_base if self.api_base.endswith("/v1") else self.api_base + "/v1",
+                    http_client=self._http_client,
+                    timeout=self.timeout,
+                    max_retries=0,
+                )
+                kwargs: dict = dict(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user",   "content": user},
+                    ],
+                    temperature=0.2,
+                )
+                if self.max_output_tokens:
+                    kwargs["max_tokens"] = self.max_output_tokens
+                resp = await openai_client.chat.completions.create(**kwargs)
+                text = resp.choices[0].message.content or ""
+                elapsed = time.monotonic() - t0
+                self._audit_save(n, "response", text)
+                logger.debug("LLM #%04d ok  attempt=%d  %.1fs  out=%d tok",
+                             n, attempt + 1, elapsed, len(text) // 2)
+                return text
+            except openai.BadRequestError as e:
+                msg = str(e).lower()
+                if any(kw in msg for kw in _OVERFLOW_KEYWORDS):
+                    raise ContextOverflowError(str(e)) from e
+                raise LLMUnavailableError(f"400: {e}") from e
+            except openai.RateLimitError as e:
+                logger.warning("LLM #%04d  429 Rate Limit (attempt %d) → ждём %ds", n, attempt + 1, self.retry_wait_seconds)
+                if self.max_retries != -1 and attempt >= self.max_retries:
+                    raise LLMUnavailableError(str(e)) from e
+                await asyncio.sleep(self.retry_wait_seconds)
+                attempt += 1
+            except (openai.APITimeoutError, openai.APIConnectionError) as e:
+                logger.warning("LLM #%04d  %s (attempt %d) → повтор", n, type(e).__name__, attempt + 1)
+                if self.max_retries != -1 and attempt >= self.max_retries:
+                    raise LLMUnavailableError(str(e)) from e
+                attempt += 1
+            except openai.APIStatusError as e:
+                if e.status_code in (500, 502, 503, 504):
+                    if self.max_retries != -1 and attempt >= self.max_retries:
+                        raise LLMUnavailableError(str(e)) from e
+                    await asyncio.sleep(self.retry_wait_seconds)
+                    attempt += 1
+                else:
+                    raise LLMUnavailableError(f"HTTP {e.status_code}: {e}") from e
+
     def _next_call_n(self) -> int:
         self._call_counter += 1
         return self._call_counter

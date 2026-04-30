@@ -20,6 +20,7 @@ class PipelineConfig:
     api_base: str
     api_key: str
     output_path: str | None
+    output_mode: str = "json"  # "json" — JSON schema + валидация; "text" — свободный формат
     map_concurrency: int = 5
     context_tokens: int = 32000   # ЕДИНСТВЕННЫЙ параметр контекста:
                                    # полный размер окна модели в токенах.

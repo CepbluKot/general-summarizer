@@ -69,9 +69,25 @@ class Pipeline:
         logger.info("  Контекст      : %d токенов  (модель)", cfg.context_tokens)
         logger.info("  Данные/батч   : %d токенов  (%.0f%%)", cfg.token_budget, 100*cfg.token_budget/cfg.context_tokens)
         logger.info("  Ответ модели  : %d токенов  (%.0f%%)", cfg.max_output_tokens, 100*cfg.max_output_tokens/cfg.context_tokens)
+        logger.info("  Режим         : %s", cfg.output_mode)
         logger.info("  Параллельность: %d", cfg.map_concurrency)
         logger.info("  Артефакты     : %s", str(self._run_dir) if self._run_dir else "отключено")
         logger.info(SEP)
+
+        if cfg.output_mode == "text":
+            partials_text = await self._run_map_text(rows)
+            logger.info("")
+            result_text = await self._run_reduce_text(partials_text)
+            if self._run_dir:
+                p = self._run_dir / "result.txt"
+                p.write_text(result_text, encoding="utf-8")
+                logger.info(SEP)
+                logger.info("Готово за %.1fс  →  %s", time.monotonic() - t0, p)
+            else:
+                logger.info(SEP)
+                logger.info("Готово за %.1fс", time.monotonic() - t0)
+            logger.info(SEP)
+            return result_text  # type: ignore[return-value]
 
         partials = await self._run_map(rows)
 
@@ -359,3 +375,96 @@ class Pipeline:
     def _is_server_down(exc: Exception) -> bool:
         msg = str(exc).lower()
         return "502" in msg or "503" in msg or "bad gateway" in msg or "service unavailable" in msg
+
+    # ── FREE TEXT MODE ────────────────────────────────────────────────
+
+    async def _run_map_text(self, rows: list[str]) -> list[str]:
+        map_system = self._build_map_system()
+        prompt_tokens = estimate_tokens(map_system)
+        data_budget = max(100, self.config.token_budget - prompt_tokens)
+        chunks = chunk(rows, data_budget)
+        logger.info("СТАДИЯ 1  ▶  MAP (text mode)")
+        logger.info("  Строк всего   : %d", len(rows))
+        logger.info("  Промпт        : ~%d токенов", prompt_tokens)
+        logger.info("  Данные/батч   : %d токенов  (%d строк → %d чанков)",
+                    data_budget, len(rows), len(chunks))
+        t_map = time.monotonic()
+        sem = asyncio.Semaphore(self.config.map_concurrency)
+        chunk_idx = [0]
+
+        async def process(ch: list[str]) -> str:
+            async with sem:
+                idx = chunk_idx[0]
+                chunk_idx[0] += 1
+                tok = sum(estimate_tokens(r) for r in ch)
+                logger.info("  MAP  %d/%d  строк=%d  токенов~%d", idx + 1, len(chunks), len(ch), tok)
+                t = time.monotonic()
+                text = await self.llm.call_text(map_system, "\n".join(ch))
+                p = None
+                if self._run_dir:
+                    p = self._run_dir / "map" / f"chunk_{idx:03d}.txt"
+                    p.write_text(text, encoding="utf-8")
+                logger.info("  MAP  %d/%d  ✓  %.1fс%s",
+                            idx + 1, len(chunks), time.monotonic() - t,
+                            f"  →  {p}" if p else "")
+                return text
+
+        results = list(await asyncio.gather(*[process(ch) for ch in chunks]))
+        logger.info("СТАДИЯ 1  ✓  MAP завершён за %.1fс  (%d результатов)", time.monotonic() - t_map, len(results))
+        return results
+
+    async def _run_reduce_text(self, items: list[str]) -> str:
+        if len(items) == 1:
+            logger.info("СТАДИЯ 2  ▶  REDUCE (text mode) — один элемент, merge не нужен")
+            return items[0]
+
+        logger.info("СТАДИЯ 2  ▶  REDUCE (text mode)")
+        logger.info("  Элементов     : %d", len(items))
+        t_reduce = time.monotonic()
+
+        system = _fmt(
+            self.config.reduce_prompt_template,
+            user_prompt=self.config.user_prompt,
+            output_schema="",
+            partial_results="",
+        )
+        prompt_tokens = estimate_tokens(system)
+        item_budget = max(100, self._reduce_budget_tokens() - prompt_tokens)
+
+        for round_num in range(self.config.max_reduce_rounds):
+            if len(items) == 1:
+                break
+            # группируем по токенному бюджету
+            groups: list[list[str]] = []
+            current_group: list[str] = []
+            current_tokens = 0
+            for item in items:
+                t = estimate_tokens(item)
+                if current_group and current_tokens + t > item_budget:
+                    groups.append(current_group)
+                    current_group, current_tokens = [], 0
+                current_group.append(item)
+                current_tokens += t
+            if current_group:
+                groups.append(current_group)
+
+            logger.info("  REDUCE раунд %d: %d элементов → %d групп",
+                        round_num + 1, len(items), len(groups))
+            next_items: list[str] = []
+            for g_idx, group in enumerate(groups):
+                if len(group) == 1:
+                    next_items.append(group[0])
+                    continue
+                user = "\n\n".join(f"### Часть {i+1}\n{p}" for i, p in enumerate(group))
+                try:
+                    merged = await self.llm.call_text(system, user)
+                except (ContextOverflowError, LLMUnavailableError):
+                    merged = "\n\n---\n\n".join(group)  # fallback: concat
+                if self._run_dir:
+                    p = self._run_dir / "reduce" / f"round_{round_num+1:02d}_group_{g_idx+1:02d}.txt"
+                    p.write_text(merged, encoding="utf-8")
+                next_items.append(merged)
+            items = next_items
+
+        logger.info("СТАДИЯ 2  ✓  REDUCE завершён за %.1fс", time.monotonic() - t_reduce)
+        return items[0]

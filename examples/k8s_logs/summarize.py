@@ -7,9 +7,24 @@ import asyncio
 import json
 import sys
 import urllib.request
+from enum import Enum
 from pathlib import Path
 
-# ── CONFIG ────────────────────────────────────────────────────────────────────
+
+# ── РЕЖИМЫ ───────────────────────────────────────────────────────────────────
+
+class OutputMode(Enum):
+    STRUCTURED = "json"   # JSON + валидация по схеме (instructor)
+    FREE       = "text"   # свободный формат — ЛЛМ сам решает структуру
+
+
+class ReportFormat(Enum):
+    BRIEF      = "brief"      # краткое саммари (3-5 предложений на батч)
+    DETAILED   = "detailed"   # подробный анализ с событиями и гипотезами
+    TIMELINE   = "timeline"   # хронологическая лента событий
+
+
+# ── CONFIG ───────────────────────────────────────────────────────────────────
 
 PERIOD_START  = "2025-04-01T09:00:00"
 PERIOD_END    = "2025-04-01T10:00:00"
@@ -34,6 +49,10 @@ RETRY_WAIT_SECONDS = 60      # секунд ожидания при rate limit /
 LLM_TIMEOUT        = 10800   # таймаут одного LLM-вызова в секундах (3 часа)
 
 INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBackOff on several pods."
+
+# Режим вывода: переключи чтобы изменить поведение без правки промптов
+OUTPUT_MODE   = OutputMode.STRUCTURED   # OutputMode.FREE — без схемы, свободный текст
+REPORT_FORMAT = ReportFormat.DETAILED   # влияет на промпты (см. MAP_PROMPT ниже)
 
 OUTPUT_FILE   = "examples/k8s_logs/result.json"   # None → stdout
 LOG_FILE      = "examples/k8s_logs/run.log"        # None → только stderr
@@ -235,6 +254,7 @@ async def main():
         api_base=LLM_API_BASE,
         api_key=LLM_API_KEY,
         output_path=OUTPUT_FILE,
+        output_mode=OUTPUT_MODE.value,
         context_tokens=LLM_CONTEXT_TOKENS,
         max_output_tokens=LLM_OUTPUT_TOKENS,
         map_concurrency=MAP_CONCURRENCY,
@@ -247,10 +267,16 @@ async def main():
     pipeline = Pipeline(config)
     result = await pipeline.run(rows)
 
-    output = json.dumps(result, ensure_ascii=False, indent=2)
-    if OUTPUT_FILE:
-        Path(OUTPUT_FILE).write_text(output, encoding="utf-8")
-        print(f"Result → {OUTPUT_FILE}", file=sys.stderr)
+    if OUTPUT_MODE == OutputMode.FREE:
+        output = result  # уже строка
+        out_file = OUTPUT_FILE.replace(".json", ".txt") if OUTPUT_FILE else None
+    else:
+        output = json.dumps(result, ensure_ascii=False, indent=2)
+        out_file = OUTPUT_FILE
+
+    if out_file:
+        Path(out_file).write_text(output, encoding="utf-8")
+        print(f"Result → {out_file}", file=sys.stderr)
     else:
         print(output)
 
