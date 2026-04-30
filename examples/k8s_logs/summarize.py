@@ -54,8 +54,9 @@ INCIDENT      = "Airflow workers failing on ndp-p01. Tasks hanging, ImagePullBac
 OUTPUT_MODE   = OutputMode.STRUCTURED   # OutputMode.FREE — без схемы, свободный текст
 REPORT_FORMAT = ReportFormat.DETAILED   # влияет на промпты (см. MAP_PROMPT ниже)
 
-OUTPUT_FILE   = "examples/k8s_logs/result.json"   # None → stdout
-LOG_FILE      = "examples/k8s_logs/run.log"        # None → только stderr
+OUTPUT_FILE   = None   # результат сохраняется в runs/{timestamp}/result.json автоматически
+                       # задай путь если нужна копия в фиксированном месте
+LOG_FILE      = None   # лог пишется в stderr; задай путь для записи в файл
 RESUME_RUN    = None  # "20260430_100000" — продолжить упавший запуск
                       # найди имя папки в runs/ и укажи сюда
 
