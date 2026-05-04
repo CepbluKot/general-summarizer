@@ -1,36 +1,40 @@
 """Dify Code Node: Reduce — Take Group
 
+Нарезает items на одну группу для мержа по токенному бюджету.
+
+json mode: токены = len(json(item)) // 3
+text mode: токены = len(item["text"]) // 3
+
 Inputs:
   items        (Array[Object]) — global
-  offset       (Number)        — global: текущая позиция в items
-  token_budget (str)           — токенов на группу (default "6000")
-  max_group    (str)           — макс. элементов в группе (default "29")
+  offset       (Number)        — global
+  input_mode   (str)           — "json" | "text"
+  token_budget (str)           — токенов на группу
 Outputs:
-  group       (Array[Object]) — группа для мержа
-  new_offset  (Number)        — следующий offset
-  has_more    (Number)        — 1 если после группы ещё есть элементы
+  group      (Array[Object]) — группа для мержа
+  new_offset (Number)
+  has_more   (Number)        — 1 если после группы ещё есть элементы
 """
 import json
 
 
-def main(items: list, offset: int = 0,
-         token_budget: str = "6000", max_group: str = "29") -> dict:
-    budget  = int(token_budget)
-    max_els = int(max_group)
-    idx     = int(offset)
+def main(items: list, offset: int = 0, input_mode: str = "json",
+         token_budget: str = "6000") -> dict:
+    budget = int(token_budget)
+    idx    = int(offset)
 
     group  = []
     tokens = 0
 
     for item in items[idx:]:
         item_str = json.dumps(item, ensure_ascii=False)
-        t = len(item_str) // 3
+        t        = len(item.get("text", item_str)) // 3 if input_mode == "text" else len(item_str) // 3
+
         if group and tokens + t > budget:
             break
+
         group.append(item)
         tokens += t
-        if len(group) >= max_els:
-            break
 
     new_offset = idx + len(group)
     return {
