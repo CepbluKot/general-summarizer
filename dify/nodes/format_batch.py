@@ -27,10 +27,9 @@ def main(batch: list, output_mode: str = "json", output_schema: str = "") -> dic
         parts.append("Data:\n" + json.dumps(rows, ensure_ascii=False, indent=2))
         return {"text": "\n\n".join(parts)}
 
-    # text mode — извлекаем поле "text" если есть, иначе весь объект строкой
-    lines = []
-    for i, s in enumerate(batch, 1):
+    # text mode — склеиваем слова обратно в текст
+    words = []
+    for s in batch:
         row = json.loads(s) if isinstance(s, str) else s
-        content = row.get("text", json.dumps(row, ensure_ascii=False))
-        lines.append(f"{i}. {content}")
-    return {"text": "\n".join(lines)}
+        words.append(row.get("text", ""))
+    return {"text": " ".join(words)}

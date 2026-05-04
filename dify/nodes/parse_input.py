@@ -1,46 +1,71 @@
-"""Dify Code Node: Parse Input
+"""Dify Code Node: Parse Input + Split
 
-Нормализует входные данные в Array[Object].
+Живёт внутри MAP Loop. На каждой итерации читает срез raw_input по offset
+и возвращает батч — без материализации всего массива.
 
-input_mode="json":
-  - JSON array of objects  → как есть
-  - JSON array of strings  → [{"text": s}, ...]
-  - JSON object            → [obj]
+json mode:
+  - парсит JSON array, берёт срез начиная с offset по token_budget
+  - batch — JSON-строка массива объектов текущего батча
 
-input_mode="text":
-  - разбивается по строкам → [{"text": line}, ...]
-  - пустые строки пропускаются
+text mode:
+  - делит по словам, берёт срез начиная с offset по token_budget
+  - batch — строка слов батча через пробел
 
 Inputs:
-  raw_input  (str) — данные: JSON или plain text
-  input_mode (str) — "json" | "text"
+  raw_input    (str)    — исходные данные (глобальная строка)
+  offset       (int)    — текущая позиция (loop-переменная)
+  input_mode   (str)    — "json" | "text"
+  token_budget (str)    — токенов на батч
 Outputs:
-  rows  (Array[Object]) — нормализованный список для split ноды
-  count (Number)        — количество строк
+  batch        (str)    — данные батча для format_batch
+  next_offset  (int)    — новый offset для loop-переменной
+  has_more     (int)    — 1 если есть ещё данные, 0 если конец
 """
 import json
 
 
-def main(raw_input: str, input_mode: str = "json") -> dict:
-    text = raw_input.strip()
+def main(raw_input: str, offset: int, input_mode: str = "json",
+         token_budget: str = "6000") -> dict:
+    budget = int(token_budget)
+    idx    = int(offset)
 
     if input_mode == "json":
-        parsed = json.loads(text)
+        rows  = json.loads(raw_input.strip())
+        batch = []
+        tokens = 0
 
-        if isinstance(parsed, list):
-            if not parsed:
-                return {"rows": [], "count": 0}
-            if isinstance(parsed[0], dict):
-                return {"rows": parsed, "count": len(parsed)}
-            rows = [{"text": str(item)} for item in parsed]
-            return {"rows": rows, "count": len(rows)}
+        while idx < len(rows):
+            row     = rows[idx]
+            row_str = json.dumps(row, ensure_ascii=False)
+            t       = len(row_str) // 3
+            if batch and tokens + t > budget:
+                break
+            batch.append(row)
+            tokens += t
+            idx += 1
 
-        if isinstance(parsed, dict):
-            return {"rows": [parsed], "count": 1}
-
-        return {"rows": [{"text": str(parsed)}], "count": 1}
+        return {
+            "batch":       json.dumps(batch, ensure_ascii=False),
+            "next_offset": idx,
+            "has_more":    1 if idx < len(rows) else 0,
+        }
 
     # text mode
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    rows = [{"text": line} for line in lines]
-    return {"rows": rows, "count": len(rows)}
+    words  = raw_input.split()
+    batch  = []
+    tokens = 0
+
+    while idx < len(words):
+        word = words[idx]
+        t    = len(word) // 3 + 1
+        if batch and tokens + t > budget:
+            break
+        batch.append(word)
+        tokens += t
+        idx += 1
+
+    return {
+        "batch":       " ".join(batch),
+        "next_offset": idx,
+        "has_more":    1 if idx < len(words) else 0,
+    }

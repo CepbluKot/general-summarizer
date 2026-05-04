@@ -26,9 +26,6 @@ def main(group: list, output_mode: str = "json", output_schema: str = "") -> dic
         parts.append("Partial analyses to merge:\n" + json.dumps(group, ensure_ascii=False, indent=2))
         return {"text": "\n\n".join(parts)}
 
-    # text mode — каждый элемент это {"text": "..."}
-    blocks = []
-    for i, item in enumerate(group, 1):
-        content = item.get("text", json.dumps(item, ensure_ascii=False))
-        blocks.append(f"[Part {i}]\n{content}")
-    return {"text": "\n\n".join(blocks)}
+    # text mode — склеиваем частичные результаты через разделитель
+    blocks = [item.get("text", "") for item in group]
+    return {"text": "\n\n---\n\n".join(blocks)}
