@@ -27,8 +27,13 @@ def main(items: list, offset: int = 0, input_mode: str = "json",
     tokens = 0
 
     for item in items[idx:]:
-        item_str = json.dumps(item, ensure_ascii=False)
-        t        = len(item.get("text", item_str)) // 3 if input_mode == "text" else len(item_str) // 3
+        if isinstance(item, str):
+            item_str = item
+            t = len(item) // 3
+            item = {"text": item}
+        else:
+            item_str = json.dumps(item, ensure_ascii=False)
+            t = len(item.get("text", item_str)) // 3 if input_mode == "text" else len(item_str) // 3
 
         if group and tokens + t > budget:
             break
