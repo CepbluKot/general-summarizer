@@ -30,25 +30,30 @@ def main(raw_input: str, offset: int, input_mode: str = "json",
     idx    = int(offset)
 
     if input_mode == "json":
-        rows  = json.loads(raw_input.strip())
-        batch = []
-        tokens = 0
+        try:
+            rows = json.loads(raw_input.strip())
+        except (json.JSONDecodeError, ValueError):
+            # fallback: если не валидный JSON — обрабатываем как text
+            input_mode = "text"
+        else:
+            batch  = []
+            tokens = 0
 
-        while idx < len(rows):
-            row     = rows[idx]
-            row_str = json.dumps(row, ensure_ascii=False)
-            t       = len(row_str) // 3
-            if batch and tokens + t > budget:
-                break
-            batch.append(row)
-            tokens += t
-            idx += 1
+            while idx < len(rows):
+                row     = rows[idx]
+                row_str = json.dumps(row, ensure_ascii=False)
+                t       = len(row_str) // 3
+                if batch and tokens + t > budget:
+                    break
+                batch.append(row)
+                tokens += t
+                idx += 1
 
-        return {
-            "batch":       json.dumps(batch, ensure_ascii=False),
-            "next_offset": idx,
-            "has_more":    1 if idx < len(rows) else 0,
-        }
+            return {
+                "batch":       json.dumps(batch, ensure_ascii=False),
+                "next_offset": idx,
+                "has_more":    1 if idx < len(rows) else 0,
+            }
 
     # text mode
     words  = raw_input.split()
