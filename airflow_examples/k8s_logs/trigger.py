@@ -220,6 +220,7 @@ def main():
     conf = {
         "input_path":         "/data/k8s_input.json",
         "input_format":       "json",
+        "output_mode":        "json",
         "prompt":             user_prompt,
         "output_schema_path": "/data/k8s_schema.json",
         "output_path":        "/data/k8s_output.json",

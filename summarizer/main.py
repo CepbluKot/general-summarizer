@@ -28,7 +28,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
 
     task = p.add_argument_group("Task")
     task.add_argument("--prompt", required=True, help="Summarization goal/instructions")
-    task.add_argument("--output-schema", required=True, help="Path to JSON Schema file for output")
+    task.add_argument("--output-schema", default=None, help="Path to JSON Schema file (required for --output-mode json)")
 
     prompts = p.add_argument_group("Prompts (optional overrides)")
     prompts.add_argument("--map-prompt", default=None)
@@ -42,6 +42,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
 
     out = p.add_argument_group("Output")
     out.add_argument("--output", "-o", default=None, help="Output file (default: stdout)")
+    out.add_argument("--output-mode", choices=["json", "text"], default="json",
+                     help="json: structured output with schema validation; text: free-form text")
 
     pipe = p.add_argument_group("Pipeline")
     pipe.add_argument("--map-concurrency", type=int, default=5)
@@ -59,14 +61,20 @@ async def _main(argv=None) -> int:
     from summarizer.loader import load
     from summarizer.pipeline import Pipeline
 
-    try:
-        output_schema = json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        print(f"ERROR: output schema file not found: {args.output_schema}", file=sys.stderr)
-        return 1
-    except json.JSONDecodeError as e:
-        print(f"ERROR: invalid JSON in output schema: {e}", file=sys.stderr)
-        return 1
+    if args.output_mode == "json":
+        if not args.output_schema:
+            print("ERROR: --output-schema is required for --output-mode json", file=sys.stderr)
+            return 1
+        try:
+            output_schema = json.loads(Path(args.output_schema).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            print(f"ERROR: output schema file not found: {args.output_schema}", file=sys.stderr)
+            return 1
+        except json.JSONDecodeError as e:
+            print(f"ERROR: invalid JSON in output schema: {e}", file=sys.stderr)
+            return 1
+    else:
+        output_schema = {}
 
     try:
         map_prompt = _load_prompt(args.map_prompt, "map_default.txt")
@@ -89,6 +97,7 @@ async def _main(argv=None) -> int:
         api_base=args.api_base,
         api_key=args.api_key,
         output_path=args.output,
+        output_mode=args.output_mode,
         map_concurrency=args.map_concurrency,
         token_budget=args.token_budget,
         context_tokens=args.context_tokens,
@@ -111,7 +120,7 @@ async def _main(argv=None) -> int:
     pipeline = Pipeline(config)
     result = await pipeline.run(rows)
 
-    output = json.dumps(result, ensure_ascii=False, indent=2)
+    output = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
 
     if args.output:
         Path(args.output).write_text(output, encoding="utf-8")

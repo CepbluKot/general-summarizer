@@ -12,15 +12,16 @@ Airflow Variables (задать в Admin → Variables):
   LLM_MODEL     — название модели
 
 Params (задаются при ручном триггере или в dag_run.conf):
-  input_path        — путь к файлу данных внутри контейнера (/data/...)
-  input_format      — json | text
-  prompt            — задача суммаризации
-  output_schema_path — путь к JSON Schema файлу внутри контейнера (/data/...)
-  output_path       — путь для результата внутри контейнера (/data/...)
-  schema_hint       — описание полей (опционально, только для json)
-  map_concurrency   — параллельность MAP (default 3)
-  token_budget      — токенов на батч (default 6000)
-  context_tokens    — размер контекста модели (default 32000)
+  input_path         — путь к файлу данных внутри контейнера (/data/...)
+  input_format       — json | text
+  output_mode        — json (схема + валидация) | text (свободный формат)
+  prompt             — задача суммаризации
+  output_schema_path — путь к JSON Schema (нужен только при output_mode=json)
+  output_path        — путь для результата внутри контейнера (/data/...)
+  schema_hint        — описание полей (опционально, только для json input)
+  map_concurrency    — параллельность MAP (default 3)
+  token_budget       — токенов на батч (default 6000)
+  context_tokens     — размер контекста модели (default 32000)
 """
 from __future__ import annotations
 
@@ -48,32 +49,42 @@ with DAG(
     catchup=False,
     tags=["summarizer", "llm"],
     params={
-        "input_path":         Param("/data/input.json",  type="string", description="Путь к входному файлу внутри контейнера"),
-        "input_format":       Param("json",              type="string", enum=["json", "text"]),
+        "input_path":         Param("/data/input.json",  type="string",  description="Путь к входному файлу внутри контейнера"),
+        "input_format":       Param("json",              type="string",  enum=["json", "text"]),
+        "output_mode":        Param("json",              type="string",  enum=["json", "text"],
+                                    description="json: структурированный вывод по схеме; text: свободный текст"),
         "prompt":             Param("Summarize the data", type="string", description="Задача суммаризации"),
-        "output_schema_path": Param("/data/schema.json", type="string", description="Путь к JSON Schema файлу"),
-        "output_path":        Param("/data/output.json", type="string", description="Путь для записи результата"),
-        "schema_hint":        Param("",                  type="string", description="Описание полей (опционально)"),
+        "output_schema_path": Param("/data/schema.json", type="string",  description="Путь к JSON Schema (только для output_mode=json)"),
+        "output_path":        Param("/data/output.json", type="string",  description="Путь для записи результата"),
+        "schema_hint":        Param("",                  type="string",  description="Описание полей (опционально, для json input)"),
         "map_concurrency":    Param(3,                   type="integer", minimum=1, maximum=20),
         "token_budget":       Param(6000,                type="integer", minimum=1000),
         "context_tokens":     Param(32000,               type="integer", minimum=4000),
     },
 ) as dag:
 
+    # --output-schema передаём только в json режиме
+    output_schema_arg = (
+        "{% if params.output_mode == 'json' %}"
+        "--output-schema {{ params.output_schema_path }}"
+        "{% endif %}"
+    )
+
     run_summarizer = DockerOperator(
         task_id="run_summarizer",
         image="general-summarizer:latest",
-        command=[
-            "--input",           "{{ params.input_path }}",
-            "--format",          "{{ params.input_format }}",
-            "--prompt",          "{{ params.prompt }}",
-            "--output-schema",   "{{ params.output_schema_path }}",
-            "--output",          "{{ params.output_path }}",
-            "--schema-hint",     "{{ params.schema_hint }}",
-            "--map-concurrency", "{{ params.map_concurrency }}",
-            "--token-budget",    "{{ params.token_budget }}",
-            "--context-tokens",  "{{ params.context_tokens }}",
-        ],
+        command=(
+            "--input           {{ params.input_path }}"
+            " --format         {{ params.input_format }}"
+            " --output-mode    {{ params.output_mode }}"
+            " --prompt         '{{ params.prompt }}'"
+            " --output         {{ params.output_path }}"
+            " --schema-hint    '{{ params.schema_hint }}'"
+            " --map-concurrency {{ params.map_concurrency }}"
+            " --token-budget   {{ params.token_budget }}"
+            " --context-tokens {{ params.context_tokens }}"
+            " {{ params.output_mode == 'json' | ternary('--output-schema ' ~ params.output_schema_path, '') }}"
+        ),
         environment={
             "LLM_API_BASE": "{{ var.value.LLM_API_BASE }}",
             "LLM_API_KEY":  "{{ var.value.LLM_API_KEY }}",
