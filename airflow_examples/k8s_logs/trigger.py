@@ -9,6 +9,7 @@
     python airflow_examples/k8s_logs/trigger.py
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -28,10 +29,10 @@ CH_PASSWORD = ""
 CH_DATABASE = "default"
 MAX_ROWS    = 5000
 
-AIRFLOW_BASE_URL = "http://localhost:8080"
-AIRFLOW_USER     = "airflow"
-AIRFLOW_PASSWORD = "airflow"
-DAG_ID           = "general_summarizer"
+AIRFLOW_BASE_URL = os.getenv("AIRFLOW_BASE_URL", "http://localhost:8080")
+AIRFLOW_USER     = os.getenv("AIRFLOW_USER",     "airflow")
+AIRFLOW_PASSWORD = os.getenv("AIRFLOW_PASSWORD", "airflow")
+DAG_ID           = os.getenv("AIRFLOW_DAG_ID",   "general_summarizer")
 
 # Директория, примонтированная в контейнер как /data
 DATA_DIR = Path("/opt/airflow/data")
