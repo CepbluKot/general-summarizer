@@ -25,6 +25,7 @@ Params (при триггере):
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
@@ -34,11 +35,10 @@ from kubernetes.client import models as k8s
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-IMAGE = "registry.your-company.com/general-summarizer:latest"
-
-K8S_NAMESPACE      = "airflow"
-K8S_DATA_PVC       = "summarizer-data"   # PVC с входными файлами и схемами
-K8S_RUNS_PVC       = "summarizer-runs"   # PVC для артефактов pipeline
+IMAGE          = os.getenv("SUMMARIZER_IMAGE",     "registry.your-company.com/general-summarizer:latest")
+K8S_NAMESPACE  = os.getenv("SUMMARIZER_NAMESPACE", "airflow")
+K8S_DATA_PVC   = os.getenv("SUMMARIZER_DATA_PVC",  "summarizer-data")
+K8S_RUNS_PVC   = os.getenv("SUMMARIZER_RUNS_PVC",  "summarizer-runs")
 
 # ── DAG ───────────────────────────────────────────────────────────────────────
 
