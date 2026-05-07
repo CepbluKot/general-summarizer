@@ -34,8 +34,7 @@ AIRFLOW_USER     = os.getenv("AIRFLOW_USER",     "airflow")
 AIRFLOW_PASSWORD = os.getenv("AIRFLOW_PASSWORD", "airflow")
 DAG_ID           = os.getenv("AIRFLOW_DAG_ID",   "general_summarizer")
 
-# Директория, примонтированная в контейнер как /data
-DATA_DIR = Path("/opt/airflow/data")
+DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
 
 SCHEMA_HINT = (
     "timestamp: event time ISO8601, "
