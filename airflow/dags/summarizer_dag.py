@@ -25,20 +25,19 @@ Params (при триггере):
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.models import Param
+from airflow.models import Param, Variable
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 from kubernetes.client import models as k8s
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-IMAGE          = os.getenv("SUMMARIZER_IMAGE",     "registry.your-company.com/general-summarizer:latest")
-K8S_NAMESPACE  = os.getenv("SUMMARIZER_NAMESPACE", "airflow")
-K8S_DATA_PVC   = os.getenv("SUMMARIZER_DATA_PVC",  "summarizer-data")
-K8S_RUNS_PVC   = os.getenv("SUMMARIZER_RUNS_PVC",  "summarizer-runs")
+IMAGE          = Variable.get("SUMMARIZER_IMAGE",     default_var="registry.your-company.com/general-summarizer:latest")
+K8S_NAMESPACE  = Variable.get("SUMMARIZER_NAMESPACE", default_var="airflow")
+K8S_DATA_PVC   = Variable.get("SUMMARIZER_DATA_PVC",  default_var="summarizer-data")
+K8S_RUNS_PVC   = Variable.get("SUMMARIZER_RUNS_PVC",  default_var="summarizer-runs")
 
 # ── DAG ───────────────────────────────────────────────────────────────────────
 
