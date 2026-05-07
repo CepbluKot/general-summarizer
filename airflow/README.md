@@ -1,6 +1,6 @@
-# General Summarizer — Airflow
+# General Summarizer — Airflow + Kubernetes
 
-Запуск MAP-REDUCE суммаризатора через Airflow + DockerOperator.
+Запуск MAP-REDUCE суммаризатора через Airflow + KubernetesPodOperator.
 
 ---
 
@@ -10,79 +10,88 @@
 airflow/
   Dockerfile          — образ суммаризатора
   dags/
-    summarizer_dag.py — Airflow DAG
+    summarizer_dag.py — Airflow DAG (KubernetesPodOperator)
+  k8s/
+    pvc.yaml          — PersistentVolumeClaims для данных и артефактов
   README.md
 ```
 
 ---
 
-## 1. Сборка Docker-образа
-
-Из корня репозитория:
+## 1. Сборка и публикация образа
 
 ```bash
-docker build -f airflow/Dockerfile -t general-summarizer:latest .
+# Из корня репозитория
+docker build -f airflow/Dockerfile -t registry.your-company.com/general-summarizer:latest .
+docker push registry.your-company.com/general-summarizer:latest
 ```
 
-Образ включает пакет `summarizer/` и все зависимости из `requirements.txt`.
+Замени `registry.your-company.com` на свой registry. Обнови `IMAGE` в `dags/summarizer_dag.py`.
 
 ---
 
-## 2. Установка провайдера Docker для Airflow
+## 2. Создание PVC в k8s
 
 ```bash
-pip install apache-airflow-providers-docker
+kubectl apply -f airflow/k8s/pvc.yaml
 ```
+
+Два PVC в namespace `airflow`:
+- `summarizer-data` — входные файлы, схемы, результаты (монтируется в `/data`)
+- `summarizer-runs` — артефакты pipeline: map/, reduce/, llm/ (монтируется в `/app/runs`)
+
+Требуют `ReadWriteMany` — нужен StorageClass с поддержкой RWX (NFS, CephFS и т.п.).
+Поправь `storageClassName` в `pvc.yaml` под свой кластер.
 
 ---
 
-## 3. Подготовка директорий
+## 3. Положить файлы в PVC
+
+Входные файлы (`input.json`, `schema.json`) нужно предварительно загрузить в PVC.
+Варианты:
 
 ```bash
-mkdir -p /opt/airflow/data   # входные файлы, схемы, результаты
-mkdir -p /opt/airflow/runs   # артефакты pipeline (map/, reduce/, llm/)
-```
+# через временный pod
+kubectl run loader --image=busybox --restart=Never \
+  --overrides='{"spec":{"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"summarizer-data"}}],"containers":[{"name":"loader","image":"busybox","command":["sleep","3600"],"volumeMounts":[{"name":"data","mountPath":"/data"}]}]}}' \
+  -n airflow
 
-Положи в `/opt/airflow/data/`:
-- `input.json` — входные данные (JSON-массив объектов или plain text)
-- `schema.json` — JSON Schema для вывода
-
-Пример `schema.json`:
-```json
-{
-  "type": "object",
-  "properties": {
-    "summary": {"type": "string"},
-    "events": {"type": "array", "items": {"type": "object"}},
-    "recommendations": {"type": "array", "items": {"type": "string"}}
-  }
-}
+kubectl cp input.json airflow/loader:/data/input.json
+kubectl cp schema.json airflow/loader:/data/schema.json
+kubectl delete pod loader -n airflow
 ```
 
 ---
 
 ## 4. Airflow Variables
 
-В Airflow UI → Admin → Variables добавь:
+В Airflow UI → Admin → Variables:
 
 | Key | Value |
 |---|---|
-| `LLM_API_BASE` | `http://your-llm-server:8000` |
+| `LLM_API_BASE` | `http://llm-server.your-cluster:8000` |
 | `LLM_API_KEY` | `sk-your-key` |
 | `LLM_MODEL` | `qwen2.5-72b-instruct` |
 
 ---
 
-## 5. DAG — параметры запуска
+## 5. Установка провайдера Kubernetes для Airflow
 
-DAG `general_summarizer` запускается вручную (schedule=None).
+```bash
+pip install apache-airflow-providers-cncf-kubernetes
+```
 
-При триггере через UI (Trigger DAG w/ config) передай JSON:
+---
+
+## 6. Запуск DAG
+
+Через UI (Trigger DAG w/ config):
 
 ```json
 {
   "input_path":         "/data/input.json",
   "input_format":       "json",
+  "output_mode":        "json",
   "prompt":             "Incident: Airflow workers failing. Find root causes.",
   "output_schema_path": "/data/schema.json",
   "output_path":        "/data/output.json",
@@ -96,56 +105,35 @@ DAG `general_summarizer` запускается вручную (schedule=None).
 Или через CLI:
 
 ```bash
-airflow dags trigger general_summarizer --conf '{
-  "input_path": "/data/input.json",
-  "input_format": "json",
-  "prompt": "Summarize k8s incident logs",
-  "output_schema_path": "/data/schema.json",
-  "output_path": "/data/output.json"
-}'
+airflow dags trigger general_summarizer --conf '{...}'
 ```
 
 ---
 
-## 6. Volumes
+## 7. Параметры DAG
 
-| Host | Container | Назначение |
+| Параметр | Тип | Описание |
 |---|---|---|
-| `/opt/airflow/data` | `/data` | входные файлы и результаты |
-| `/opt/airflow/runs` | `/app/runs` | артефакты: map/, reduce/, llm/ |
-
-После выполнения результат в `/opt/airflow/data/output.json`.
-Артефакты в `/opt/airflow/runs/{timestamp}/`.
-
----
-
-## 7. Запуск Airflow с доступом к Docker
-
-Airflow worker должен иметь доступ к Docker socket:
-
-```yaml
-# docker-compose.yml (фрагмент)
-volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
-  - /opt/airflow/data:/opt/airflow/data
-  - /opt/airflow/runs:/opt/airflow/runs
-```
+| `input_path` | String | путь к файлу данных в поде (`/data/...`) |
+| `input_format` | json/text | формат входных данных |
+| `output_mode` | json/text | json: схема + валидация; text: свободный формат |
+| `prompt` | String | задача суммаризации |
+| `output_schema_path` | String | путь к JSON Schema (только для `output_mode=json`) |
+| `output_path` | String | путь для записи результата |
+| `schema_hint` | String | описание полей (опционально) |
+| `map_concurrency` | int | параллельность MAP (default 3) |
+| `token_budget` | int | токенов на батч (default 6000) |
+| `context_tokens` | int | контекст модели в токенах (default 32000) |
 
 ---
 
-## 8. Проверка образа без Airflow
+## 8. Конфигурация DAG
 
-```bash
-docker run --rm \
-  -v /opt/airflow/data:/data \
-  -v /opt/airflow/runs:/app/runs \
-  -e LLM_API_BASE=http://your-llm:8000 \
-  -e LLM_API_KEY=sk-key \
-  -e LLM_MODEL=qwen2.5-72b-instruct \
-  general-summarizer:latest \
-  --input /data/input.json \
-  --format json \
-  --prompt "Summarize the logs" \
-  --output-schema /data/schema.json \
-  --output /data/output.json
+В `dags/summarizer_dag.py` поправь под свой кластер:
+
+```python
+IMAGE          = "registry.your-company.com/general-summarizer:latest"
+K8S_NAMESPACE  = "airflow"
+K8S_DATA_PVC   = "summarizer-data"
+K8S_RUNS_PVC   = "summarizer-runs"
 ```

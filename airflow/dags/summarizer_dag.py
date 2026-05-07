@@ -1,39 +1,46 @@
 """
 Airflow DAG: General Summarizer
 
-Запускает MAP-REDUCE суммаризатор в Docker-контейнере.
+Запускает MAP-REDUCE суммаризатор как Pod в Kubernetes через KubernetesPodOperator.
 
-Входные файлы (input, schema) и выходной файл (output) читаются/пишутся
-через примонтированный volume /data.
+Входные/выходные файлы передаются через PVC, примонтированный в /data.
+Артефакты runs/ пишутся в отдельный PVC.
 
-Airflow Variables (задать в Admin → Variables):
+Airflow Variables (Admin → Variables):
   LLM_API_BASE  — например http://llm-server:8000
   LLM_API_KEY   — API ключ
   LLM_MODEL     — название модели
 
-Params (задаются при ручном триггере или в dag_run.conf):
-  input_path         — путь к файлу данных внутри контейнера (/data/...)
+Params (при триггере):
+  input_path         — путь к входному файлу внутри пода (/data/...)
   input_format       — json | text
-  output_mode        — json (схема + валидация) | text (свободный формат)
+  output_mode        — json | text
   prompt             — задача суммаризации
-  output_schema_path — путь к JSON Schema (нужен только при output_mode=json)
-  output_path        — путь для результата внутри контейнера (/data/...)
-  schema_hint        — описание полей (опционально, только для json input)
-  map_concurrency    — параллельность MAP (default 3)
-  token_budget       — токенов на батч (default 6000)
-  context_tokens     — размер контекста модели (default 32000)
+  output_schema_path — путь к JSON Schema (только для output_mode=json)
+  output_path        — путь для результата (/data/...)
+  schema_hint        — описание полей (опционально)
+  map_concurrency    — параллельность MAP
+  token_budget       — токенов на батч
+  context_tokens     — размер контекста модели
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.models import Param, Variable
-from airflow.providers.docker.operators.docker import DockerOperator
-from docker.types import Mount
+from airflow.models import Param
+from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
+from kubernetes.client import models as k8s
 
-DATA_DIR = "/opt/airflow/data"   # host-путь, монтируется в /data внутри контейнера
-RUNS_DIR = "/opt/airflow/runs"   # host-путь для артефактов runs/
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+
+IMAGE = "registry.your-company.com/general-summarizer:latest"
+
+K8S_NAMESPACE      = "airflow"
+K8S_DATA_PVC       = "summarizer-data"   # PVC с входными файлами и схемами
+K8S_RUNS_PVC       = "summarizer-runs"   # PVC для артефактов pipeline
+
+# ── DAG ───────────────────────────────────────────────────────────────────────
 
 default_args = {
     "owner": "airflow",
@@ -47,55 +54,71 @@ with DAG(
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["summarizer", "llm"],
+    tags=["summarizer", "llm", "k8s"],
     params={
-        "input_path":         Param("/data/input.json",  type="string",  description="Путь к входному файлу внутри контейнера"),
-        "input_format":       Param("json",              type="string",  enum=["json", "text"]),
-        "output_mode":        Param("json",              type="string",  enum=["json", "text"],
-                                    description="json: структурированный вывод по схеме; text: свободный текст"),
-        "prompt":             Param("Summarize the data", type="string", description="Задача суммаризации"),
-        "output_schema_path": Param("/data/schema.json", type="string",  description="Путь к JSON Schema (только для output_mode=json)"),
-        "output_path":        Param("/data/output.json", type="string",  description="Путь для записи результата"),
-        "schema_hint":        Param("",                  type="string",  description="Описание полей (опционально, для json input)"),
+        "input_path":         Param("/data/input.json",  type="string"),
+        "input_format":       Param("json",              type="string", enum=["json", "text"]),
+        "output_mode":        Param("json",              type="string", enum=["json", "text"]),
+        "prompt":             Param("Summarize the data", type="string"),
+        "output_schema_path": Param("/data/schema.json", type="string"),
+        "output_path":        Param("/data/output.json", type="string"),
+        "schema_hint":        Param("",                  type="string"),
         "map_concurrency":    Param(3,                   type="integer", minimum=1, maximum=20),
         "token_budget":       Param(6000,                type="integer", minimum=1000),
         "context_tokens":     Param(32000,               type="integer", minimum=4000),
     },
 ) as dag:
 
-    # --output-schema передаём только в json режиме
-    output_schema_arg = (
-        "{% if params.output_mode == 'json' %}"
-        "--output-schema {{ params.output_schema_path }}"
-        "{% endif %}"
-    )
-
-    run_summarizer = DockerOperator(
+    run_summarizer = KubernetesPodOperator(
         task_id="run_summarizer",
-        image="general-summarizer:latest",
-        command=(
-            "--input           {{ params.input_path }}"
-            " --format         {{ params.input_format }}"
-            " --output-mode    {{ params.output_mode }}"
-            " --prompt         '{{ params.prompt }}'"
-            " --output         {{ params.output_path }}"
-            " --schema-hint    '{{ params.schema_hint }}'"
-            " --map-concurrency {{ params.map_concurrency }}"
-            " --token-budget   {{ params.token_budget }}"
-            " --context-tokens {{ params.context_tokens }}"
-            " {{ params.output_mode == 'json' | ternary('--output-schema ' ~ params.output_schema_path, '') }}"
-        ),
-        environment={
-            "LLM_API_BASE": "{{ var.value.LLM_API_BASE }}",
-            "LLM_API_KEY":  "{{ var.value.LLM_API_KEY }}",
-            "LLM_MODEL":    "{{ var.value.LLM_MODEL }}",
-        },
-        mounts=[
-            Mount(source=DATA_DIR, target="/data",      type="bind"),
-            Mount(source=RUNS_DIR, target="/app/runs",  type="bind"),
+        name="general-summarizer",
+        namespace=K8S_NAMESPACE,
+        image=IMAGE,
+        image_pull_policy="Always",
+
+        arguments=[
+            "--input",            "{{ params.input_path }}",
+            "--format",           "{{ params.input_format }}",
+            "--output-mode",      "{{ params.output_mode }}",
+            "--prompt",           "{{ params.prompt }}",
+            "--output",           "{{ params.output_path }}",
+            "--schema-hint",      "{{ params.schema_hint }}",
+            "--map-concurrency",  "{{ params.map_concurrency | string }}",
+            "--token-budget",     "{{ params.token_budget | string }}",
+            "--context-tokens",   "{{ params.context_tokens | string }}",
+            # --output-schema только в json режиме
+            "{% if params.output_mode == 'json' %}--output-schema{% endif %}",
+            "{% if params.output_mode == 'json' %}{{ params.output_schema_path }}{% endif %}",
         ],
-        docker_url="unix://var/run/docker.sock",
-        network_mode="bridge",
-        auto_remove="success",
-        mount_tmp_dir=False,
+
+        env_vars=[
+            k8s.V1EnvVar(name="LLM_API_BASE", value="{{ var.value.LLM_API_BASE }}"),
+            k8s.V1EnvVar(name="LLM_API_KEY",  value="{{ var.value.LLM_API_KEY }}"),
+            k8s.V1EnvVar(name="LLM_MODEL",    value="{{ var.value.LLM_MODEL }}"),
+        ],
+
+        volumes=[
+            k8s.V1Volume(
+                name="data",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(claim_name=K8S_DATA_PVC),
+            ),
+            k8s.V1Volume(
+                name="runs",
+                persistent_volume_claim=k8s.V1PersistentVolumeClaimVolumeSource(claim_name=K8S_RUNS_PVC),
+            ),
+        ],
+
+        volume_mounts=[
+            k8s.V1VolumeMount(name="data", mount_path="/data"),
+            k8s.V1VolumeMount(name="runs", mount_path="/app/runs"),
+        ],
+
+        resources=k8s.V1ResourceRequirements(
+            requests={"cpu": "500m", "memory": "512Mi"},
+            limits={"cpu": "2",     "memory": "2Gi"},
+        ),
+
+        get_logs=True,
+        is_delete_operator_pod=True,
+        in_cluster=True,
     )
