@@ -112,7 +112,7 @@ with DAG(
             k8s.V1VolumeMount(name="runs", mount_path="/app/runs"),
         ],
 
-        resources=k8s.V1ResourceRequirements(
+        container_resources=k8s.V1ResourceRequirements(
             requests={"cpu": "500m", "memory": "512Mi"},
             limits={"cpu": "2",     "memory": "2Gi"},
         ),
