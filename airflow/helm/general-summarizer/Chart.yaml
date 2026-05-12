@@ -1,0 +1,6 @@
+apiVersion: v2
+name: general-summarizer
+description: Airflow + Kubernetes infrastructure for the general-summarizer MAP-REDUCE pipeline
+type: application
+version: 0.1.0
+appVersion: "latest"
