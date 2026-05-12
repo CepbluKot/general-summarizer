@@ -1,35 +1,8 @@
-# Namespace где Airflow запускает поды пайплайна
 namespace: k-ndp-d01-ndp-monitor-llm-test-ns
 
-image:
-  repository: registry.your-company.com/general-summarizer
-  tag: latest
-  pullPolicy: Always
-
-# PersistentVolumeClaims
 storage:
-  className: nfs   # замени на свой StorageClass
+  className: nfs
   data:
-    size: 10Gi     # входные файлы, схемы, результаты
+    size: 10Gi
   runs:
-    size: 50Gi     # артефакты pipeline: map/, reduce/, llm/
-
-# RBAC — какой ServiceAccount Airflow-воркера получает права создавать поды
-rbac:
-  serviceAccountName: airflow-multiinstance    # SA воркера в airflowNamespace
-  airflowNamespace: k-ndp-d01-ndp-airflow-monlog  # namespace где живёт Airflow
-
-# LLM credentials — кладутся в Secret и пробрасываются в под через envFrom
-llm:
-  apiBase: "http://llm-server:8000"
-  apiKey: "sk-placeholder"
-  model: "qwen2.5-72b-instruct"
-
-# Ресурсы пода пайплайна
-resources:
-  requests:
-    cpu: "500m"
-    memory: "512Mi"
-  limits:
-    cpu: "2"
-    memory: "2Gi"
+    size: 50Gi
