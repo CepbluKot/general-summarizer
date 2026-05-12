@@ -6,10 +6,10 @@ Airflow DAG: General Summarizer
 Входные/выходные файлы передаются через PVC, примонтированный в /data.
 Артефакты runs/ пишутся в отдельный PVC.
 
-Credentials (LLM) берутся из Kubernetes Secret «general-summarizer-credentials»,
-который создаётся Helm-чартом airflow/helm/general-summarizer.
-
-Airflow Variables (Admin → Variables) — только инфра:
+Airflow Variables (Admin → Variables):
+  LLM_API_BASE     — например http://llm-server:8000
+  LLM_API_KEY      — API ключ
+  LLM_MODEL        — название модели
   SUMMARIZER_IMAGE     — образ (default: registry.your-company.com/general-summarizer:latest)
   SUMMARIZER_NAMESPACE — namespace для подов (default: k-ndp-d01-ndp-monitor-llm-test-ns)
   SUMMARIZER_DATA_PVC  — PVC с данными (default: summarizer-data)
@@ -43,8 +43,6 @@ K8S_NAMESPACE  = Variable.get("SUMMARIZER_NAMESPACE", default_var="k-ndp-d01-ndp
 K8S_DATA_PVC   = Variable.get("SUMMARIZER_DATA_PVC",  default_var="summarizer-data")
 K8S_RUNS_PVC   = Variable.get("SUMMARIZER_RUNS_PVC",  default_var="summarizer-runs")
 
-# Secret создаётся Helm-чартом helm/general-summarizer
-CREDENTIALS_SECRET = "general-summarizer-credentials"
 
 # ── DAG ───────────────────────────────────────────────────────────────────────
 
@@ -97,10 +95,10 @@ with DAG(
             "{% if params.output_mode == 'json' %}{{ params.output_schema_path }}{% endif %}",
         ],
 
-        env_from=[
-            k8s.V1EnvFromSource(
-                secret_ref=k8s.V1SecretEnvSource(name=CREDENTIALS_SECRET),
-            ),
+        env_vars=[
+            k8s.V1EnvVar(name="LLM_API_BASE", value="{{ var.value.LLM_API_BASE }}"),
+            k8s.V1EnvVar(name="LLM_API_KEY",  value="{{ var.value.LLM_API_KEY }}"),
+            k8s.V1EnvVar(name="LLM_MODEL",    value="{{ var.value.LLM_MODEL }}"),
         ],
 
         volumes=[
