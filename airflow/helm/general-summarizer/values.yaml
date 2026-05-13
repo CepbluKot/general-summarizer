@@ -1,4 +1,4 @@
-namespace: k-ndp-d01-ndp-monitor-llm-test-ns
+namespace: k-ndp-v01-ndp-monitor-clickhouse-full-benchmark
 
 storage:
   className: nfs
@@ -9,4 +9,4 @@ storage:
 
 rbac:
   serviceAccountName: airflow-multiinstance
-  airflowNamespace: k-ndp-d01-ndp-airflow-monlog
+  airflowNamespace: k-ndp-v01-ndp-monitor-airflow
